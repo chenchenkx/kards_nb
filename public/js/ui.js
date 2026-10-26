@@ -58,7 +58,7 @@
   /** 桌面震动（打击感基础）：短、硬、机械式衰减 —— 对齐原版"干脆"的冲击节奏 */
   UI.shake = function (px) {
     const g = G(); if (!g || !px) return;
-    px = Math.min(px, 12);
+    px = Math.min(px, 4);
     g.fromTo('#table', { x: 0, y: 0 }, {
       keyframes: [
         { x: -px, y: px * 0.5 }, { x: px * 0.85, y: -px * 0.62 },
@@ -782,6 +782,29 @@
     }
   };
 
+  /** 老兵化（对齐原版录像：蓝白流光绕卡旋转，卡面提亮换装后回稳） */
+  UI.fxVeteran = function (el) {
+    const g = G();
+    if (!g || !el) return;
+    const c = centerInTable(el);
+    const s = document.createElement('div');
+    s.className = 'veteran-swirl';
+    s.style.left = c.x + 'px';
+    s.style.top = c.y + 'px';
+    fxLayer().appendChild(s);
+    SFX.play('veteran');
+    g.timeline()
+      .fromTo(s, { scale: 0.28, opacity: 0, rotation: -50 },
+        { scale: 1, opacity: 1, rotation: 0, duration: 0.2, ease: 'power2.out' })
+      .to(s, { rotation: 160, scale: 1.25, opacity: 0, duration: 0.55, ease: 'power2.in' })
+      .add(() => s.remove());
+    g.timeline()
+      .to(el, { scale: 1.1, duration: 0.16, ease: 'power2.out' })
+      .to(el, { scale: 1, duration: 0.32, ease: 'elastic.out(1.1, 0.5)' });
+    g.fromTo(el, { filter: 'brightness(2.3) saturate(0.55) hue-rotate(12deg)' },
+      { filter: 'brightness(1) saturate(1) hue-rotate(0deg)', duration: 0.55, ease: 'power2.out', overwrite: 'auto' });
+  };
+
   /** 胜利金爆：全屏金色绽放 —— 对齐原版胜利瞬间（gif_06 帧 46-47 全屏 25910px 金色） */
   UI.fxVictory = function () {
     const g = G();
@@ -824,7 +847,7 @@
     flash.className = 'screen-flash';
     fxLayer().appendChild(flash);
     setTimeout(() => flash.remove(), 520);
-    UI.shake(9);
+    UI.shake(5);
     SFX.play('hqhit');
   };
 
@@ -913,7 +936,7 @@
                 SFX.play('hit');
                 UI.fxCardFlash(toEl);
                 UI.fxBurst(centerInTable(toEl), {});
-                UI.shake(7);
+                UI.shake(4);
                 // 受击方：55ms 推出 12% 距离 → 110ms 硬回位（原版无回弹尾巴）
                 gsap.timeline({ overwrite: 'auto' })
                   .to(toEl, {
@@ -963,7 +986,7 @@
               .add(() => {
                 UI.fxPuffs(c, { n: 3, spread: 26, life: 0.42 });
                 UI.fxCardFlash(el);
-                UI.shake(6);
+                UI.shake(3);
                 const r = document.createElement('div');
                 r.className = 'ring';
                 r.style.left = c.x + 'px';
@@ -983,6 +1006,9 @@
       } else if (ev.e === 'death') {
         const el = findCardEl(ev.uid);
         if (el) steps.push(() => UI.fxSmoke(centerInTable(el)));
+      } else if (ev.e === 'veteran') {
+        const el = findCardEl(ev.uid);
+        if (el) steps.push((next) => { UI.fxVeteran(el); setTimeout(next, 380); return 380; });
       } else if (ev.e === 'order') {
         steps.push(() => { SFX.play('select'); UI.hint(ev.name, 900); });
       }

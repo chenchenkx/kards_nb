@@ -2002,6 +2002,7 @@
               if (nc.loc === 'front') { const i = this.frontline.indexOf(src); if (i >= 0) { nc.slot = src.slot; this.frontline[i] = nc; } }
               else { const b = this.players[src.owner].board; const i = b.indexOf(src); if (i >= 0) b[i] = nc; }
               this.log(`${src.name} 晋升为老兵（${nc.name}）`);
+              this.ev({ e: 'veteran', uid: src.uid, name: nc.name, owner: src.owner });
               break;
             }
           }
@@ -2693,7 +2694,11 @@
   function buildDb(cardsJson, hqsJson) {
     const byId = {};
     const cards = cardsJson;
-    for (const c of cards) byId[c.id] = c;
+    // 是否有官方卡图：无图的卡不进构筑卡池 / 收藏（效果生成的衍生单位仍可按 id 找到，
+    // 显示时走 .no-img 名字牌兜底）
+    const hasArt = (c) => !!(c && c.image && !/Blank/i.test(c.image));
+    for (const c of cards) { byId[c.id] = c; c.hasArt = hasArt(c); }
+    const deckPool = cards.filter(c => c.hasArt);
     const list = hqsJson || [];
     const hqById = {};
     for (const h of list) hqById[h.id] = h;
@@ -2722,7 +2727,7 @@
       .sort((a, b) => (b.isDefault - a.isDefault) || (b.defense - a.defense) || a.name.localeCompare(b.name));
 
     const nationOf = {};
-    return { byId, cards, hqs, hqsOf, hqById, hqList: list, nationOf };
+    return { byId, cards, deckPool, hasArt, hqs, hqsOf, hqById, hqList: list, nationOf };
   }
 
   // ================= 构筑规则（对齐官方） =================
@@ -2758,6 +2763,7 @@
     for (const id of list) {
       const d = db.byId[id];
       if (!d) { warnings.push(`卡牌 ${id} 不在卡库中，将被忽略`); continue; }
+      if (d.hasArt === false) errors.push(`${d.name} 没有官方卡图，不在可用卡池中`);
       counts[id] = (counts[id] || 0) + 1;
       const limit = rarityLimit(d);
       if (counts[id] > limit) errors.push(`${d.name} 超过 ${limit} 张上限`);
@@ -2792,7 +2798,7 @@
     const playable = (c) => c.cost > 0 && c.cost <= 7 &&
       (c.nation === nation || c.nation === 'Neutral' || (ally && c.nation === ally)) &&
       (!ally || c.nation !== ally || !isEliteCard(c));   // 副国不带精英
-    const pool = db.cards.filter(playable);
+    const pool = (db.deckPool || db.cards).filter(playable);
     const units = pool.filter(c => ['infantry', 'tank', 'artillery', 'fighter', 'bomber'].includes(c.type));
     const orders = pool.filter(c => c.type === 'order');
     const gotchas = pool.filter(c => c.type === 'gotcha');
@@ -2840,6 +2846,13 @@
         const c = pickByCost(gotchas);
         if (c && add(c)) { deck.push(c.id); break; }
       }
+    }
+    // 补位：卡池较小的国家（如过滤无图卡后）凑不满 39 张时，
+    // 按费用/随机从整个可用池补齐，仍受稀有度与副国上限约束
+    let guard = 0;
+    while (deck.length < RULES.DECK_SIZE && guard++ < 400) {
+      const c = rng.pick(pool);
+      if (c && add(c)) deck.push(c.id);
     }
     return deck.slice(0, RULES.DECK_SIZE);
   }

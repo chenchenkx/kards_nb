@@ -656,6 +656,21 @@ html, body {
   -webkit-mask-image: radial-gradient(circle, #000 52%, transparent 70%);
   mask-image: radial-gradient(circle, #000 52%, transparent 70%);
 }
+/* 老兵化能量漩涡（对齐原版：蓝白流光绕卡旋转 + 卡面变亮换装） */
+.veteran-swirl {
+  position: absolute; width: 200px; height: 200px;
+  transform: translate(-50%, -50%);
+  pointer-events: none; mix-blend-mode: screen;
+  background:
+    conic-gradient(from 0deg,
+      rgba(120,200,255,0) 0deg, rgba(198,238,255,.95) 16deg, rgba(90,160,255,0) 44deg,
+      rgba(150,215,255,.8) 72deg, rgba(70,140,255,0) 118deg,
+      rgba(186,232,255,.9) 158deg, rgba(80,150,255,0) 208deg,
+      rgba(160,220,255,.75) 258deg, rgba(60,130,255,0) 306deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 24%, #000 44%, transparent 74%);
+  mask-image: radial-gradient(circle, transparent 24%, #000 44%, transparent 74%);
+  filter: blur(1.2px);
+}
 /* 燃烧尾声的黑烟（对齐原版：火焰烧尽后 0.4-0.5s 黑烟笼罩卡位） */
 .smoke-dark {
   position: absolute; width: 146px; height: 136px;

@@ -305,7 +305,7 @@
     const q = (document.getElementById('collection-search').value || '').toLowerCase().trim();
     const nation = document.getElementById('collection-nation').value;
     const type = document.getElementById('collection-type').value;
-    let list = App.db.cards.filter(c =>
+    let list = (App.db.deckPool || App.db.cards).filter(c =>
       (!nation || c.nation === nation) &&
       (!type || c.type === type) &&
       (!q || c.name.toLowerCase().includes(q) || (c.text || '').toLowerCase().includes(q)));
@@ -467,7 +467,7 @@
     function renderPool(filter) {
       poolWrap.innerHTML = '';
       const f = (filter || '').toLowerCase();
-      const pool = App.db.cards.filter(c =>
+      const pool = (App.db.deckPool || App.db.cards).filter(c =>
         (c.nation === App.nation || c.nation === 'Neutral' || (App.ally && c.nation === App.ally)) &&
         c.type !== 'location' &&
         (!f || c.name.toLowerCase().includes(f) || (c.text || '').toLowerCase().includes(f)))
