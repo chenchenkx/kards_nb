@@ -8,7 +8,7 @@ const cards = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'car
 const hqs = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'hqs.json'), 'utf8'));
 const db = Engine.buildDb(cards, hqs);
 
-const URL = 'ws://localhost:8080';
+const URL = process.env.KARDS_URL || 'ws://localhost:8080';
 const deck0 = Engine.autoDeck('Germany', db, Engine.makeRng(11));
 const deck1 = Engine.autoDeck('Soviet', db, Engine.makeRng(22));
 
