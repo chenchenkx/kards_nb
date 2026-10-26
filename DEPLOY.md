@@ -29,7 +29,7 @@
 
 点 **Create 应用** 后它会自动：克隆仓库 → `npm install` → 读 `package.json` 的 `"start": "node server/index.js"` → 注入 `PORT` → 起服务。
 
-部署完打开 `https://kards-game.bonto.run`，页脚应显示 **「构建 v6」**。
+部署完打开 `https://kards-game.bonto.run`，页脚应显示 **「构建 v7」**。
 
 > 存储 256MB：项目工作区约 46MB（卡图 43MB），够用。但**不要**把卡图原仓库 `kards-img/` 传上去。
 
@@ -92,7 +92,7 @@ cloudflared tunnel --url http://localhost:8080
 
 ## 上线后自检清单
 
-1. 打开域名 → 开始界面出现，页脚有 **「构建 v6」**
+1. 打开域名 → 开始界面出现，页脚有 **「构建 v7」**
 2. 人机对战 → 手牌**有卡图**（不是黑块）、能拖拽出牌、动画正常
 3. 两个浏览器窗口：一个「创建房间」拿 4 位码，另一个「加入房间」输入 → 能进对局
 4. 若第 3 步失败：检查平台是否把实例数设成了 1（多实例会导致两个玩家不在同一个进程里）
@@ -104,7 +104,8 @@ cloudflared tunnel --url http://localhost:8080
 | 日志现象 | 原因 | 处理 |
 |---|---|---|
 | `jsdom@30.x: The engine "node" is incompatible ... Got "18.x"` 然后 `Cannot find module 'ws'` | 平台 Node 18 装不了 jsdom@30，导致整次 `yarn install` 中断，`ws` 也没装上 | **已修复**：`jsdom` 已移出 `package.json`，改为只有 `ws` |
-| `Cannot find module 'ws'`（单独出现） | 平台没跑安装，或安装被跳过 | 确认平台的 Install / Build 命令是 `npm install --omit=dev`（或 `yarn install --production`）；若仍不行，页面仍可打开玩人机，日志里会有「未安装 ws 模块」提示 |
+| `Cannot find module 'ws'` | 旧版本遗留（v7 起服务端已改为零依赖 `server/wsmini.js`，不会再出现） | 重新部署拿最新代码即可 |
+| 页面能开但「创建房间」提示无法连接服务器 | 平台代理没转发 WebSocket，或服务端还是旧版本 | v7 起服务端零依赖；确认部署的是最新提交（页脚「构建 v7」） |
 | `EADDRINUSE` / 端口占用 | 起了多个进程 | 重启实例 |
 | `Cannot find module '../data/cards.json'` | 启动目录不是仓库根 | 启动命令用 `npm start` |
 | 页面能开但房间连不上 | 实例数 > 1，两个玩家落在不同进程 | 把副本数/自动扩缩容关掉，保持 1 个实例 |
@@ -115,9 +116,9 @@ cloudflared tunnel --url http://localhost:8080
 
 - 仓库根即项目根：`server/`、`public/`、`data/`、`package.json`
 - 卡图统一使用 `public/assets/cards/thumb/`（300×421），仓库里没有 `img/` 大图
-- **生产依赖只有 `ws` 一个**（安装后 `node_modules` 约 207KB），没有原生模块、不需要编译
-- `jsdom` 已从 `package.json` 移除（只用于本地跑 `tools/uitest.js`，需要它时单独 `npm i -D jsdom@26`）
+- **生产依赖为 0 个**：WebSocket 用自研的 `server/wsmini.js`（只用 Node 内置 `http`/`crypto`/`events` 实现握手与帧编解码），所以平台即使安装依赖失败也能正常跑联机
+- `ws` 只在 `devDependencies`（本地测试脚本做客户端用），`jsdom` 同样仅本地测试，两者都不参与线上安装
 - `.yarnrc` 写了 `ignore-engines true`：万一平台用 yarn 安装、且某个包声明了引擎版本限制，也不会让安装中断
-- `server/index.js` 对 `ws` 做了**降级保护**：即使 `ws` 没装上，网页照常打开、人机对战正常，只是联机房间不可用（不会整站崩溃）
+- `server/index.js` 用 `require('./wsmini')` 起 WebSocket，**不依赖任何 npm 包**，不会再出现 `Cannot find module 'ws'`
 - `Dockerfile` 已备好（任何支持 Docker 的平台或自己的 VPS 都能用）
 - 已忽略：`kards-img/`（719MB 原始图库）、`node_modules/`、`shots/`、参考资料目录
