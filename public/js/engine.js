@@ -239,6 +239,19 @@
    * 2) 含 "when <已知事件>" 的句子返回空，让 parseClauses 走 parseTriggerSentence，
    *    不再按静态效果在部署时无条件执行。
    */
+  /** "对 X 造成伤害" 的目标类型归一（伤害修正用） */
+  function dmgTargetOf(s) {
+    const t = String(s || '').toLowerCase();
+    if (/\bhqs?\b|headquarter/.test(t)) return 'hq';
+    if (/\bair\b|fighter|bomber/.test(t)) return 'air';
+    if (/\bground\b/.test(t)) return 'ground';
+    if (/tank/.test(t)) return 'tank';
+    if (/infantry/.test(t)) return 'infantry';
+    if (/artillery/.test(t)) return 'artillery';
+    if (/units?|enem/.test(t)) return 'all';
+    return null;
+  }
+
   /** 已知触发事件词汇表：命中才把 "when" 句让路给触发解析器（防回归） */
   const TRIGGER_EVENT_RE = new RegExp([
     'destroys? (?:a |an |another |the )?(?:enemy )?unit',
@@ -329,8 +342,37 @@
     m = /(?:your hq (?:gets|gains)|give your hq) \+(\d+)\+(\d+)/i.exec(t);
     if (m) { ops.push({ op: 'hqBuff', a: +m[1], d: +m[2] }); return ops; }
 
-    // ================= 条件/触发式关键字授予（试玩报告 v9 缺口修复） =================
-    // 条件已由 parseOps 包装层剥离并挂到 op.cond；execOp 统一求值，不满足则跳过。
+    // ================= 通用战斗/状态机制（覆盖高频未实现句式） =================
+    // "Deals double damage against tanks" / "Deals +3 damage to air units / HQs"
+    m = /\bdeals? double damage (?:against|to) ([a-z ]{3,18})/i.exec(t);
+    if (m) { ops.push({ op: 'dmgMod', mult: 2, vs: dmgTargetOf(m[1]) }); return ops; }
+    m = /\bdeals? \+?(\d+) (?:extra )?damage (?:to|against) ([a-z ]{3,20}?)(?:\.|,|$)/i.exec(t);
+    if (m) {
+      const vs = dmgTargetOf(m[2]);
+      if (vs) { ops.push({ op: 'dmgMod', add: +m[1], vs }); return ops; }
+    }
+    // "Cannot be targeted by enemy orders"
+    if (/cannot be targeted by enemy (orders|commands)/i.test(t)) {
+      ops.push({ op: 'orderImmune' });
+      return ops;
+    }
+    // "Gain an extra kredit slot"（部署或指令都可能有）
+    if (/gain an? (?:extra )?kredit slot/i.test(t)) {
+      ops.push({ op: 'slots', n: 1 });
+      return ops;
+    }
+
+    // "Your orders deal N damage" → 全局指令增伤
+    m = /your orders deal \+?(\d+) damage/i.exec(t);
+    if (m) { ops.push({ op: 'orderDmgMod', n: +m[1] }); return ops; }
+    // "Reduce operation cost by N [if ...]" → 自身行动费减免
+    m = /reduce (?:its |this unit's )?operation cost by (\d+)/i.exec(t);
+    if (m) { ops.push({ op: 'opCostMod', n: -Math.abs(+m[1]) }); return ops; }
+    // "Has Guard when it doesn't have Mobilize" → 条件关键词（否定条件）
+    m = /has (blitz|guard|fury|smokescreen|ambush|shock) (?:while|when) it (?:doesn't|does not) have (\w+)/i.exec(t);
+    if (m) { ops.push({ op: 'keyword', kws: [m[1].toLowerCase()], target: 'self', self: true, cond: { c: 'hasKw', side: 'own', kw: m[2].toLowerCase(), neg: true, selfCheck: true } }); return ops; }
+
+    // ================= 条件/触发式关键字授予（试玩报告 v9 缺口修复） =================    // 条件已由 parseOps 包装层剥离并挂到 op.cond；execOp 统一求值，不满足则跳过。
     // "Gets +2 defense and Guard [if ...]"（1097. VOLKSGRENADIER）
     // "Gets +1+1 and Guard ..."（456th RIFLE REGIMENT 等触发效果）
     m = /\b(?:gets?|gains?) \+?(\d+) (attack|defense)(?: and|,) ?(blitz|guard|fury|smokescreen|ambush|shock|alpine|pincer)\b/i.exec(t);
@@ -941,6 +983,7 @@
     else if (/^(?:the )?enemy draws/i.test(whenText)) event = 'enemyDraw';
     else if (/at the end of turn/i.test(whenText) || when === 'at the end of turn' || when === 'at the end of your turn') event = 'endOfTurn';
     else if (/at the start of/i.test(whenText) || when === 'at the start of turn' || when === 'at the start of your turn') event = 'startOfTurn';
+    else if (/^(?:this unit )?attacks?(?: the)? (?:enemy |enemy's )?hq/i.test(whenText)) event = 'selfAttackHQ';
     else if (/^(?:this unit )?attacks$/i.test(whenText.trim()) || /after this unit attacks/i.test(whenText)) event = 'selfAttack';
     else if (/this unit (is destroyed|dies)/i.test(whenText)) event = 'selfDestroy';
     if (!event) return null;
@@ -982,6 +1025,7 @@
       }
       // --- 条件/触发式关键字子系统新增 ---
       case 'hasKw': {
+        if (cond.selfCheck) return !!(card && card.has && card.has(cond.kw));
         const side = cond.side === 'enemy' ? 1 - card.owner : card.owner;
         return game.unitsOf(side).some(u => u.uid !== card.uid && u.has(cond.kw));
       }
@@ -1198,6 +1242,8 @@
         u.hasActed = false;
       }
       this.purgeTempKeywords();
+      // "At the start of your turn…" 触发
+      this.fireTrigger('startOfTurn', { side: this.current }, u => u.owner === this.current);
       this.log(`── 第 ${this.turn} 回合（P${this.current + 1}）${p.kredits}/${p.slots} 指挥点 ──`);
       this.ev({ e: 'turn', turn: this.turn, side: this.current, kredits: p.kredits, slots: p.slots });
       this.draw(this.current, 1);
@@ -1247,6 +1293,8 @@
     endTurn() {
       if (this.done) return;
       const cur = this.current;
+      // "At the end of your turn…" 触发（先结算再切换行动方）
+      this.fireTrigger('endOfTurn', { side: cur }, u => u.owner === cur);
       this.expireTempBuffs(cur);
       this.current = 1 - cur;
       if (cur === 1) this.turn++;
@@ -1600,15 +1648,26 @@
       atk.hasActed = true;
 
       if (targetUid === 0) {
+        // 对 HQ 的伤害修正（如 "Deals +3 damage to HQs"、"Deals double damage to HQs"）
+        let hqDmg = atk.totalAttack;
+        if (atk._dmgMods) {
+          for (const m of atk._dmgMods) {
+            if (m.vs === 'hq') hqDmg = m.mult > 1 ? hqDmg * m.mult : hqDmg + m.add;
+          }
+        }
         this.log(`${atk.name}（攻击 ${atk.totalAttack}）攻击敌方总部（-${atk.effOpCost} 指挥点）`);
         this.ev({ e: 'attack', from: atk.uid, to: 0, owner: atk.owner });
-        this.damageHq(1 - side, atk.totalAttack, atk);
-        this.ev({ e: 'hqdamage', side: 1 - side, amount: atk.totalAttack });
+        this.damageHq(1 - side, hqDmg, atk);
+        this.ev({ e: 'hqdamage', side: 1 - side, amount: hqDmg });
+        this.fireTrigger('selfAttack', { uid: atk.uid }, u => u.uid === atk.uid);
+        this.fireTrigger('selfAttackHQ', { uid: atk.uid }, u => u.uid === atk.uid);
         return { ok: true };
       }
       const def = this.find(targetUid);
       if (!def || def.loc === 'discard') return { ok: true };
       this.ev({ e: 'attack', from: atk.uid, to: def.uid, owner: atk.owner });
+      // "When this unit attacks…" 触发（宣告攻击时结算，覆盖伏击/冲击等分支）
+      this.fireTrigger('selfAttack', { uid: atk.uid, target: def.uid }, u => u.uid === atk.uid);
 
       const ambush = def.has('ambush');
       const shock = atk.has('shock');
@@ -1619,8 +1678,18 @@
       const dmg = (a, d, silenced) => {
         if (silenced) return 0;
         let x = Math.max(0, a.totalAttack - d.heavyArmor);
+        // 伤害修正（"对坦克双倍伤害" / "对空中单位 +2 伤害" 等）
+        if (a._dmgMods) {
+          for (const m of a._dmgMods) {
+            const okVs = m.vs === 'all' || m.vs === d.type
+              || (m.vs === 'air' && (d.type === 'fighter' || d.type === 'bomber'))
+              || (m.vs === 'ground' && ['infantry', 'tank', 'artillery'].includes(d.type));
+            if (!okVs) continue;
+            x = m.mult > 1 ? x * m.mult : x + m.add;
+          }
+        }
         if (a._immune) x = 0;
-        return x;
+        return Math.max(0, x);
       };
       if (ambush || shock) {
         // Ambush: defender strikes first. Shock: attacker strikes first.
@@ -1762,7 +1831,13 @@
       };
       switch (op.op) {
         case 'damage': {
-          const apply = (t, n) => { if (t) this.damageCard(t, n, src); };
+          const apply = (t, n) => {
+            if (!t) return;
+            // "Your orders deal +N damage"：指令伤害全局加成
+            let dmg = n;
+            if (src && src.type === 'order') dmg += (this.players[me]._orderDmgMod || 0);
+            this.damageCard(t, dmg, src);
+          };
           const calcN = () => {
             switch (op.calc) {
               case 'airAttackSum': return this.unitsOf(me).filter(u => u.type === 'fighter' || u.type === 'bomber').reduce((a, u) => a + u.totalAttack, 0);
@@ -1815,6 +1890,30 @@
           p.slots = Math.min(RULES.MAX_SLOTS, p.slots + op.n);
           p.kredits = Math.min(RULES.MAX_SLOTS, p.kredits + op.n);
           this.log(`指挥点上限 +${op.n}`);
+          break;
+        }
+        case 'orderDmgMod': {
+          const p = this.players[me];
+          p._orderDmgMod = (p._orderDmgMod || 0) + op.n;
+          this.log(`我方指令伤害 +${op.n}`);
+          break;
+        }
+        case 'opCostMod': {
+          src._opCostMod = (src._opCostMod || 0) + op.n;
+          this.log(`${src.name} 行动费 ${op.n > 0 ? '+' : ''}${op.n}（当前 ${src.effOpCost}）`);
+          break;
+        }
+        case 'dmgMod': {
+          // 伤害修正（对 HQ / 空中 / 坦克等额外或翻倍伤害），在攻击结算时读取
+          src._dmgMods = src._dmgMods || [];
+          src._dmgMods.push({ add: op.add || 0, mult: op.mult || 1, vs: op.vs || 'all' });
+          this.log(`${src.name} 伤害修正：${op.mult ? '×' + op.mult : '+' + op.add}（对 ${op.vs}）`);
+          break;
+        }
+        case 'orderImmune': {
+          src._orderImmune = true;
+          src.keywords.add('orderimmune');
+          this.log(`${src.name} 不能被敌方指令指定`);
           break;
         }
         case 'kredits': {
@@ -2628,7 +2727,10 @@
         }
         if (side) break;
       }
-      if (side === 'enemy') return this.unitsOf(1 - c.owner).map(u => u.uid);
+      if (side === 'enemy') {
+        // "不能被敌方指令指定" 的单位不进入候选
+        return this.unitsOf(1 - c.owner).filter(u => !u._orderImmune).map(u => u.uid);
+      }
       if (side === 'own') return this.unitsOf(c.owner).filter(u => u.uid !== c.uid).map(u => u.uid);
       return [];
     }
