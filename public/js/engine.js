@@ -402,9 +402,23 @@
       ops.push({ op: 'groundProof' });
       return ops;
     }
-    // "Gain an extra kredit slot"（部署或指令都可能有）
-    if (/gain an? (?:extra )?kredit slot/i.test(t)) {
-      ops.push({ op: 'slots', n: 1 });
+    // "Gain two extra kredit slots" / "Gain an extra kredit slot"
+    m = /gain (an? |two |three |\d+ )?(?:extra )?kredit slots?/i.exec(t);
+    if (m) {
+      const w = (m[1] || '').trim().toLowerCase();
+      const n = w === 'two' ? 2 : w === 'three' ? 3 : /\d+/.test(w) ? +w : 1;
+      ops.push({ op: 'slots', n });
+      return ops;
+    }
+    // "Lose N kredits at the start of your next turn"
+    m = /lose (\d+) kredits? at the start of your next turn/i.exec(t);
+    if (m) { ops.push({ op: 'kreditsNextTurn', n: -Math.abs(+m[1]) }); return ops; }
+    // "Cards in your hand cost N kredits"（统一设定手牌费用）
+    m = /cards in your hand cost (\d+) kredits/i.exec(t);
+    if (m) { ops.push({ op: 'handCostSet', n: +m[1] }); return ops; }
+    // "Deploys for 0 kredits if a friendly unit was destroyed this turn"（出牌前判定）
+    if (/deploys? for 0 kredits if a friendly unit was destroyed this turn/i.test(t)) {
+      ops.push({ op: 'freeIfLost', marker: true });
       return ops;
     }
 
@@ -418,7 +432,7 @@
     m = /(?:any )?unit that attacks this unit takes (\d+) damage/i.exec(t);
     if (m) { ops.push({ op: 'thorns', n: +m[1] }); return ops; }
     // "It costs the enemy N kredits to target or attack this unit"
-    m = /costs? the enemy (\d+) kredits to (?:target or attack|attack or target|target)/i.exec(t);
+    m = /costs? the enemy \+?(\d+) kredits to (?:target or attack|attack or target|target)/i.exec(t);
     if (m) { ops.push({ op: 'enemyTax', n: +m[1] }); return ops; }
     // "Reduce attack of this unit by N each time it attacks"
     m = /reduce (?:the )?attack of this unit by (\d+) each time/i.exec(t);
@@ -450,6 +464,24 @@
         if (num) cond = { c: 'slotsAtMost', n: +num[0] };
       }
       ops.push({ op: 'dmgMod', mult: 2, vs: 'all', cond });
+      return ops;
+    }
+
+    // ================= 限制类（不能弃牌/治疗/攻击/部署条件） =================
+    if (/your cards cannot be discarded/i.test(t)) { ops.push({ op: 'noDiscard' }); return ops; }
+    if (/^units cannot be repaired/i.test(t)) { ops.push({ op: 'noHealUnits' }); return ops; }
+    m = /units with (\d+) or more attack cannot attack/i.exec(t);
+    if (m) { ops.push({ op: 'blockHighAttack', n: +m[1] }); return ops; }
+    m = /cannot be deployed if you have deployed a unit this turn/i.exec(t);
+    if (m) { ops.push({ op: 'deployGate', kind: 'noUnitPlayed' }); return ops; }
+    m = /cannot be deployed unless you have (\d+) or more kredit slots/i.exec(t);
+    if (m) { ops.push({ op: 'deployGate', kind: 'slots', n: +m[1] }); return ops; }
+    // "Draw two random 1-cost units from your deck"
+    m = /draw (a|an|one|two|three|\d+) random (\d+)?-?cost ([a-z]+)s? from your deck/i.exec(t);
+    if (m) {
+      const w = m[1].toLowerCase();
+      const n = w === 'two' ? 2 : w === 'three' ? 3 : /\d+/.test(w) ? +w : 1;
+      ops.push({ op: 'drawFilter', type: m[3].toLowerCase().replace(/s$/, ''), cost: m[2] ? +m[2] : null, n });
       return ops;
     }
 
@@ -599,6 +631,12 @@
     m = /add (?:a |an |one |two |three )?(random )?([A-Z0-9'\-\. ]+?) to your hand/i.exec(t);
     if (m) {
       if (/^copy$/i.test(m[2].trim())) { ops.push({ op: 'copyToHand' }); return ops; }
+      // "Add a X and a Y to your hand" → 两张都加入
+      const parts = m[2].split(/\s+and\s+(?:an?\s+)?/i).map(s => s.trim()).filter(Boolean);
+      if (parts.length > 1) {
+        for (const nm of parts) ops.push({ op: 'addHand', name: nm, random: !!m[1] });
+        return ops;
+      }
       ops.push({ op: 'addHand', name: m[2].trim(), random: !!m[1] });
       return ops;
     }
@@ -1358,6 +1396,8 @@
       p.kredits = p.slots;
       p.ordersPlayedThisTurn = 0;
       p.playedThisTurn = 0;
+      p._lostUnitThisTurn = false;
+      p._unitDeployedThisTurn = false;
       p.hqDamagedThisTurn = 0;
       p.kreditsSpent = 0;
       if (p._kreditsNextMod) {
@@ -1584,6 +1624,7 @@
       this.ev({ e: 'death', uid: c.uid, name: c.name, owner: c.owner });
       this.log(`${c.name} 被摧毁`);
       this.applyAuras();
+      this.players[c.owner]._lostUnitThisTurn = true;
       this.bumpHandWatches('ownUnitLost', c.owner);
     }
 
@@ -1606,10 +1647,19 @@
         + (handIndex === 0 ? (p._leftmostCost || 0) : 0)
         + (c.type === 'order' && !(p.ordersPlayedThisTurn > 0) ? (p._firstOrderDiscount || 0) : 0)
         + (c.type === 'order' ? (p._handTaxOrder || 0) : 0)
-        + ((c.type === 'gotcha') ? (p._handTaxGotcha || 0) : 0);
+        + ((c.type === 'gotcha') ? (p._handTaxGotcha || 0) : 0)
+        + ((/deploys? for 0 kredits if a friendly unit was destroyed this turn/i.test(c.text || '') && p._lostUnitThisTurn) ? -(c.cost || 0) : 0);
       const costNow = Math.max(0, c.cost + extraCost);
       if (costNow > p.kredits) return { ok: false, error: '指挥点不足' };
       if (!this.hasRoomFor(c)) return { ok: false, error: '战场没有空位' };
+      // 部署条件（文本直判："若本回合已部署过单位则不能部署 / 需要 N 个指挥点槽"）
+      if (/cannot be deployed if you have deployed a unit this turn/i.test(c.text || '') && p._unitDeployedThisTurn) {
+        return { ok: false, error: '本回合已部署过单位，无法部署该卡' };
+      }
+      const slotNeed = /cannot be deployed unless you have (\d+) or more kredit slots/i.exec(c.text || '');
+      if (slotNeed && p.slots < +slotNeed[1]) {
+        return { ok: false, error: `需要 ${slotNeed[1]} 个指挥点槽` };
+      }
       if (c.isUnit && opts.toFront === false && this.supportCount(c.owner) >= RULES.MAX_ROW) {
         if (!(this.canEnterFrontline(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW)) {
           return { ok: false, error: '支援阵线已满' };
@@ -1677,6 +1727,7 @@
         this.ev({ e: 'deploy', uid: c.uid, name: c.name, front: false, owner: c.owner });
       }
 
+      if (c.isUnit) p._unitDeployedThisTurn = true;
       // deployment effects
       const ctx = { fromLeftmost, fromRightmost, target: opts.target || null };
       this.execCardText(c, 'deployment', ctx);
@@ -1800,6 +1851,7 @@
     }
 
     canAttack(c) {
+      if (this._blockHighAttack && c.totalAttack >= this._blockHighAttack) return false;
       if (!c.isUnit || c.owner !== this.current || this.done) return false;
       if (c._noAttack) return false;
       if (c.attacksLeft <= 0) return false;
@@ -2261,6 +2313,30 @@
           }
           this.log(`${src.name} 变形成 ${nd.name}`);
           this.ev({ e: 'veteran', uid: nd.uid, name: nd.name, owner: nd.owner });
+          break;
+        }
+        case 'kreditsNextTurn': {
+          const p = this.players[me];
+          p._kreditsNextMod = (p._kreditsNextMod || 0) + op.n;
+          this.log(`下回合指挥点 ${op.n}`);
+          break;
+        }
+        case 'handCostSet': {
+          for (const c of this.players[me].hand) c._costMod = op.n - (c.cost || 0);
+          this.log(`我方手牌费用统一设为 ${op.n}`);
+          break;
+        }
+        case 'freeIfLost': {
+          src._freeIfLost = true;
+          this.log(`${src.name}：本回合有友军阵亡时可 0 费部署`);
+          break;
+        }
+        case 'noDiscard': { this.players[me]._noDiscard = true; this.log('我方卡牌不会被弃置'); break; }
+        case 'noHealUnits': { this._noHealUnits = true; this.log('单位无法被治疗'); break; }
+        case 'blockHighAttack': { this._blockHighAttack = op.n; this.log(`攻击力 ≥${op.n} 的单位无法攻击`); break; }
+        case 'deployGate': {
+          src._deployGate = { kind: op.kind, n: op.n };
+          this.log(`${src.name} 有部署条件限制`);
           break;
         }
         case 'hqFloor': {
