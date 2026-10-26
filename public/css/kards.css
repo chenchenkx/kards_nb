@@ -386,15 +386,7 @@ html, body {
   pointer-events: none;
   z-index: 5;
 }
-/* HQ 受击 */
-.hq-card.hq-hit { animation: hq-hit .42s ease-out; }
-@keyframes hq-hit {
-  0% { transform: translate(0,0) rotate(0); filter: brightness(2.4); }
-  22% { transform: translate(-6px,2px) rotate(-1.4deg); }
-  45% { transform: translate(5px,-2px) rotate(1.2deg); }
-  70% { transform: translate(-3px,1px) rotate(-.6deg); }
-  100% { transform: translate(0,0) rotate(0); filter: brightness(1.1); }
-}
+/* HQ 受击：动画由 GSAP 驱动（fxHQHit），CSS keyframes 已移除 */
 
 /* ============ 前线 ============ */
 .frontline { position: absolute; left: 0; right: 0; top: 272px; height: 168px; z-index: 8; }
@@ -520,17 +512,11 @@ html, body {
 .fx-layer { position: absolute; inset: 0; pointer-events: none; z-index: 300; overflow: hidden; }
 .dmg-number {
   position: absolute; transform: translate(-50%, 0);
-  font-size: 36px; font-weight: 900; color: #ff5f45;
-  text-shadow: 0 2px 6px #000, 0 0 16px rgba(255,60,30,.8);
-  animation: float-up .95s ease-out forwards;
-  white-space: nowrap;
+  font-size: 38px; font-weight: 900; color: #ff5f45;
+  text-shadow: 0 2px 6px #000, 0 0 18px rgba(255,60,30,.85), 0 0 3px #000;
+  white-space: nowrap;      /* 动画由 GSAP 驱动（弹出→上浮渐隐），不再用 CSS keyframes */
 }
 .dmg-number.heal { color: #7ce38b; text-shadow: 0 2px 6px #000, 0 0 14px rgba(90,255,140,.6); }
-@keyframes float-up {
-  0% { opacity: 0; transform: translate(-50%, 12px) scale(.6); }
-  25% { opacity: 1; transform: translate(-50%, -4px) scale(1.15); }
-  100% { opacity: 0; transform: translate(-50%, -46px) scale(1); }
-}
 .attack-trail {
   position: absolute;
   height: 5px;

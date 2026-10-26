@@ -27,7 +27,10 @@
     const t = document.getElementById('table');
     if (!t) return;
     SCALE = Math.min(window.innerWidth / TABLE_W, window.innerHeight / TABLE_H) || 1;
-    t.style.transform = `translate(-50%, -50%) scale(${SCALE})`;
+    // GSAP 接管 #table 变换（xPercent/yPercent 居中 + scale），桌面震动才能与之共存
+    const g = G();
+    if (g) g.set(t, { xPercent: -50, yPercent: -50, scale: SCALE, x: 0, y: 0, transformOrigin: '50% 50%' });
+    else t.style.transform = `translate(-50%, -50%) scale(${SCALE})`;
   }
   UI.fitTable = fitTable;
   window.addEventListener('resize', fitTable);
@@ -47,6 +50,46 @@
   }
 
   function fxLayer() { return document.getElementById('fx-layer'); }
+
+  // ---------------- GSAP 动画核心 ----------------
+  // 所有卡牌交互动画统一走 GSAP；未加载时退化为无动画（不破坏功能）
+  const G = () => window.gsap || null;
+
+  /** 桌面震动（打击感基础） */
+  UI.shake = function (px) {
+    const g = G(); if (!g || !px) return;
+    px = Math.min(px, 10);
+    g.fromTo('#table', { x: 0, y: 0 }, {
+      keyframes: [
+        { x: -px, y: px * 0.35 }, { x: px * 0.7, y: -px * 0.5 },
+        { x: -px * 0.45, y: px * 0.25 }, { x: 0, y: 0 },
+      ],
+      duration: 0.3, ease: 'power1.out', overwrite: 'auto',
+    });
+  };
+
+  /** 伤害飘字：弹出 → 上浮渐隐（红色打击数字） */
+  UI.fxDamage = function (el, amount, heal) {
+    if (!el || !amount) return;
+    const g = G();
+    const c = centerInTable(el);
+    const d = document.createElement('div');
+    d.className = 'dmg-number' + (heal ? ' heal' : '');
+    d.textContent = (heal ? '+' : '−') + amount;
+    const x = c.x + (Math.random() * 30 - 15);
+    const y = c.y - 46;
+    d.style.left = x + 'px';
+    d.style.top = y + 'px';
+    fxLayer().appendChild(d);
+    if (!g) { setTimeout(() => d.remove(), 1000); return; }
+    gsap.timeline()
+      .fromTo(d, { scale: 0.3, opacity: 0, y: 16 },
+        { scale: 1.35, opacity: 1, y: 0, duration: 0.13, ease: 'back.out(2.5)' })
+      .to(d, { scale: 1, duration: 0.09, ease: 'power2.out' })
+      .to(d, { y: -52, x: (Math.random() * 24 - 12), opacity: 0, duration: 0.62, ease: 'power1.out' })
+      .set(d, { display: 'none' });
+    setTimeout(() => d.remove(), 950);
+  };
 
   // ---------------- 卡牌元素池 ----------------
   const cardEls = new Map();     // uid -> element
@@ -369,16 +412,15 @@
       el.classList.toggle('dim', !playable);
       el.classList.toggle('selected', UI.selectedHand === i);
       el.classList.remove('can-act');
-      // 新抽到的牌：从桌外飞入
+      // 新抽到的牌：从桌外滑入
       if (el._isNew) {
         el._isNew = false;
-        const dy = 70;
-        try {
-          el.animate([
-            { transform: `translateY(${dy}px) scale(.9) ${el.dataset.base}`, opacity: 0 },
-            { transform: el.dataset.base, opacity: 1 },
-          ], { duration: 340, easing: 'cubic-bezier(.2,.9,.25,1)' });
-        } catch (err) { /* ignore */ }
+        const g = G();
+        if (g) {
+          gsap.fromTo(el, { y: '+=' + 92, opacity: 0, rotation: '+=' + (rot > 0 ? 7 : -7) },
+            { y: '-=' + 92, opacity: 1, rotation: '-=' + (rot > 0 ? 7 : -7), duration: 0.36, ease: 'power3.out' });
+        }
+        SFX.play('draw');
       }
     });
   }
@@ -461,9 +503,10 @@
     if (k) k.textContent = max > 12 ? 'K·' + max : 'K';
   }
 
-  // ---------------- FLIP ----------------
+  // ---------------- FLIP（GSAP 位移动画） ----------------
   function flip(before) {
     const s = SCALE || 1;
+    const g = G();
     for (const [uid, oldR] of before) {
       const el = cardEls.get(uid);
       if (!el || !el.isConnected) continue;
@@ -472,44 +515,37 @@
       const dx = (oldR.left - nr.left) / s;
       const dy = (oldR.top - nr.top) / s;
       if (Math.abs(dx) < 1.5 && Math.abs(dy) < 1.5) continue;
-      const base = el.dataset.base || '';
-      try {
-        el.animate([
-          { transform: `translate(${dx}px, ${dy}px) ${base}`.trim() },
-          { transform: base || 'none' },
-        ], { duration: 330, easing: 'cubic-bezier(.22,.9,.28,1)' });
-      } catch (e) { /* ignore */ }
+      if (!g) continue;
+      // gsap 会把当前 transform（扇形旋转等）解析为分量，x/y 只叠加位移
+      gsap.fromTo(el, { x: dx, y: dy }, {
+        x: 0, y: 0, duration: 0.34, ease: 'power3.out',
+        overwrite: 'auto', clearProps: 'x,y',
+      });
     }
   }
 
   function killCard(el, uid) {
+    const g = G();
     try {
       const c = centerInTable(el);
       UI.fxSmoke(c);
+      SFX.play('death');
     } catch (e) { /* ignore */ }
-    try {
-      el.animate([
-        { transform: 'none', opacity: 1, filter: 'brightness(1)' },
-        { transform: 'translateY(8px) scale(.82) rotate(-7deg)', opacity: 0, filter: 'brightness(.3)' },
-      ], { duration: 420, easing: 'ease-in', fill: 'forwards' });
-    } catch (e) { /* ignore */ }
+    if (g) {
+      gsap.to(el, {
+        y: 12, scale: 0.78, rotation: '-=7', opacity: 0,
+        filter: 'brightness(0.25) saturate(0.4)',
+        duration: 0.42, ease: 'power2.in', overwrite: 'auto',
+        onComplete: () => { if (el.parentNode) el.parentNode.removeChild(el); },
+      });
+    } else {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }
     recentDead.set(uid, { el, at: Date.now() });
-    setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 430);
     setTimeout(() => recentDead.delete(uid), 1200);
   }
 
   // ---------------- 特效 ----------------
-  UI.fxDamage = function (el, amount, heal) {
-    if (!el || !amount) return;
-    const c = centerInTable(el);
-    const d = document.createElement('div');
-    d.className = 'dmg-number' + (heal ? ' heal' : '');
-    d.textContent = (heal ? '+' : '−') + amount;
-    d.style.left = (c.x + (Math.random() * 26 - 13)) + 'px';
-    d.style.top = (c.y - 52) + 'px';
-    fxLayer().appendChild(d);
-    setTimeout(() => d.remove(), 1000);
-  };
 
   /** 攻击轨迹：一条从攻击者飞向目标的光条 + 命中前拖尾 */
   UI.fxTrail = function (a, b) {
@@ -562,17 +598,27 @@
     const slot = document.getElementById(which + '-hq-slot');
     if (!slot) return;
     const card = slot.querySelector('.hq-card');
+    const g = G();
     if (card) {
-      card.classList.remove('hq-hit');
-      void card.offsetWidth;
-      card.classList.add('hq-hit');
-      setTimeout(() => card.classList.remove('hq-hit'), 500);
+      if (g) {
+        // 重击晃动：向后压 + 快速抖动回弹
+        gsap.timeline()
+          .to(card, { rotation: -5, scale: 1.06, duration: 0.07, ease: 'power3.out' })
+          .to(card, { rotation: 3.5, x: 4, duration: 0.06 })
+          .to(card, { rotation: -2, x: -3, duration: 0.07 })
+          .to(card, { rotation: 1.5, x: 2, duration: 0.07 })
+          .to(card, { rotation: 0, x: 0, scale: 1, duration: 0.35, ease: 'elastic.out(1.1, 0.4)' });
+        gsap.fromTo(card, { filter: 'brightness(2.2) saturate(1.5)' },
+          { filter: 'brightness(1) saturate(1)', duration: 0.45, ease: 'power2.out', overwrite: 'auto' });
+      }
     }
     if (amount) UI.fxDamage(card || slot, amount);
     const flash = document.createElement('div');
     flash.className = 'screen-flash';
     fxLayer().appendChild(flash);
     setTimeout(() => flash.remove(), 520);
+    UI.shake(9);
+    SFX.play('hqhit');
   };
 
   UI.turnBanner = function (title, sub, mine) {
@@ -601,6 +647,11 @@
     const h = document.getElementById('target-hint');
     if (h) h.classList.add('hidden');
   };
+  /** 带错误音效的提示 */
+  UI.warn = function (msg, ms) {
+    SFX.play('error');
+    UI.hint(msg, ms);
+  };
 
   // ---------------- 事件播放 ----------------
   function findCardEl(uid) {
@@ -628,22 +679,46 @@
           steps.push((next) => {
             const a = centerInTable(fromEl);
             const b = centerInTable(toEl);
-            const dx = (b.x - a.x) * 0.6, dy = (b.y - a.y) * 0.6;
-            try {
-              fromEl.animate([
-                { transform: 'translate(0,0) scale(1)' },
-                { transform: `translate(${dx}px, ${dy}px) scale(1.08)`, offset: 0.42 },
-                { transform: 'translate(0,0) scale(1)' },
-              ], { duration: 440, easing: 'cubic-bezier(.35,0,.3,1)' });
-            } catch (e) { /* ignore */ }
-            UI.fxTrail(a, b);
-            setTimeout(() => {
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const g = G();
+            if (!g) {
+              // 无 GSAP 时的极简退化
+              UI.fxTrail(a, b);
               UI.fxSpark(toEl);
-              try {
-                toEl.animate([{ filter: 'brightness(2.8)' }, { filter: 'brightness(1)' }], { duration: 300 });
-              } catch (e) { /* ignore */ }
-            }, 190);
-            setTimeout(next, 300);
+              setTimeout(next, 260);
+              return;
+            }
+            SFX.play('whoosh');
+            UI.fxTrail(a, b);
+            const tl = gsap.timeline({ onComplete: next });
+            // ① 蓄力：微微后压
+            tl.to(fromEl, {
+              x: -dx * 0.09, y: -dy * 0.09, scale: 0.96,
+              duration: 0.13, ease: 'power2.out',
+            })
+              // ② 冲撞：加速扑向目标
+              .to(fromEl, {
+                x: dx * 0.62, y: dy * 0.62, scale: 1.1,
+                duration: 0.14, ease: 'power3.in',
+              })
+              // ③ 命中瞬间：受击方击退 + 弹性晃回
+              .add(() => {
+                SFX.play('hit');
+                UI.fxSpark(toEl);
+                UI.shake(6);
+                gsap.fromTo(toEl, { filter: 'brightness(2.6) saturate(1.4)' },
+                  { filter: 'brightness(1) saturate(1)', duration: 0.32, ease: 'power2.out', overwrite: 'auto' });
+                gsap.timeline({ overwrite: 'auto' })
+                  .to(toEl, { x: dx * 0.17, y: dy * 0.17, duration: 0.08, ease: 'power3.out' })
+                  .to(toEl, { x: 0, y: 0, duration: 0.5, ease: 'elastic.out(1.15, 0.38)' });
+              })
+              // ④ 攻击方收势回位
+              .to(fromEl, {
+                x: 0, y: 0, scale: 1,
+                duration: 0.3, ease: 'power2.inOut',
+              }, '+=0.02');
+            // 声明本步骤时长：伤害飘字等后续事件等命中之后再出现
+            return 560;
           });
         }
       } else if (ev.e === 'damage') {
@@ -656,30 +731,44 @@
       } else if (ev.e === 'deploy') {
         const el = findCardEl(ev.uid);
         if (el) {
-          steps.push(() => {
-            try {
-              el.animate([
-                { filter: 'brightness(2.4) saturate(1.4)' },
-                { filter: 'brightness(1.1) saturate(.98)' },
-              ], { duration: 520, easing: 'ease-out' });
-            } catch (e) { /* ignore */ }
+          steps.push((next) => {
+            const g = G();
+            if (!g) { setTimeout(next, 240); return; }
+            SFX.play('deploy');
             const c = centerInTable(el);
-            const r = document.createElement('div');
-            r.className = 'ring';
-            r.style.left = c.x + 'px';
-            r.style.top = c.y + 'px';
-            fxLayer().appendChild(r);
-            setTimeout(() => r.remove(), 650);
+            const tl = gsap.timeline({
+              onComplete: () => { gsap.set(el, { clearProps: 'transform,filter' }); next(); },
+            });
+            // ① 高空砸落：back.out 回弹 = 拍在桌上的重量感
+            tl.fromTo(el, { y: -95, scale: 1.3, opacity: 0, rotation: -3 },
+              { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.36, ease: 'back.out(1.9)' })
+              // ② 落地震颤：轻微放大再缩回
+              .to(el, { scale: 1.12, duration: 0.07, ease: 'power2.out' })
+              .to(el, { scale: 1, duration: 0.2, ease: 'elastic.out(1.1, 0.42)' })
+              // ③ 落地尘环 + 桌面微震
+              .add(() => {
+                const r = document.createElement('div');
+                r.className = 'ring';
+                r.style.left = c.x + 'px';
+                r.style.top = c.y + 'px';
+                fxLayer().appendChild(r);
+                setTimeout(() => r.remove(), 650);
+                UI.shake(4);
+              }, '-=0.18')
+              // ④ 出场高光渐收
+              .fromTo(el, { filter: 'brightness(1.9) saturate(1.25)' },
+                { filter: 'brightness(1) saturate(1)', duration: 0.4, ease: 'power1.out' }, '-=0.2');
+            return 640;   // 让下一步（伤害/攻击等）等落地完成
           });
         }
       } else if (ev.e === 'turn') {
         const mine = ev.side === UI.mySide;
-        steps.push(() => UI.turnBanner(mine ? '你的回合' : '敌方回合', `第 ${ev.turn} 回合 · ${ev.kredits} 指挥点`, mine));
+        steps.push(() => { SFX.play('turn'); UI.turnBanner(mine ? '你的回合' : '敌方回合', `第 ${ev.turn} 回合 · ${ev.kredits} 指挥点`, mine); });
       } else if (ev.e === 'death') {
         const el = findCardEl(ev.uid);
         if (el) steps.push(() => UI.fxSmoke(centerInTable(el)));
       } else if (ev.e === 'order') {
-        steps.push(() => UI.hint(ev.name, 900));
+        steps.push(() => { SFX.play('select'); UI.hint(ev.name, 900); });
       }
     }
 
@@ -694,17 +783,19 @@
     };
 
     if (!steps.length) { finish(); return; }
-    guard = setTimeout(finish, 2800);
+    guard = setTimeout(finish, 4500);
 
-    const gap = steps.length > 6 ? 100 : 180;
+    const gap = steps.length > 6 ? 120 : 240;
     let i = 0;
     const run = () => {
       if (i >= steps.length) { finish(); return; }
       const step = steps[i++];
       let advanced = false;
       const next = () => { if (advanced) return; advanced = true; run(); };
-      try { step(next); } catch (e) { next(); }
-      setTimeout(next, gap);
+      let declared = 0;
+      try { const r = step(next); if (typeof r === 'number') declared = r; } catch (e) { next(); }
+      // 步骤可声明自身时长（长动画不被 gap 拦腰截断），否则用 gap 兜底
+      setTimeout(next, Math.max(gap, declared));
     };
     run();
   };
@@ -729,11 +820,11 @@
 
     const isHand = el.dataset.handIndex != null && el.parentElement && el.parentElement.id === 'own-hand';
     if (isHand) {
-      if (st.current !== st.you) { UI.hint('还没到你的回合'); return; }
+      if (st.current !== st.you) { UI.warn('还没到你的回合'); return; }
       const idx = +el.dataset.handIndex;
       const v = st.players[st.you].hand[idx];
       if (!v) return;
-      if (v.cost > st.players[st.you].kredits) { UI.hint('指挥点不足'); return; }
+      if (v.cost > st.players[st.you].kredits) { UI.warn('指挥点不足'); return; }
       if (UI.selectedHand === idx) { playHand(idx); }
       else { UI.selectedHand = idx; refreshHighlights(); }
       return;
@@ -744,7 +835,7 @@
     const v = viewOfEl(el);
     if (!v) return;
     if (v.owner !== st.you) return;
-    if (st.current !== st.you) { UI.hint('还没到你的回合'); return; }
+    if (st.current !== st.you) { UI.warn('还没到你的回合'); return; }
 
     const g = UI.engine;
     if (g && g.find) {
@@ -874,13 +965,13 @@
     const g = UI.engine;
     if (d.isHand) {
       const v = d.v;
-      if (v.cost > st.players[st.you].kredits) { UI.hint('指挥点不足'); return false; }
+      if (v.cost > st.players[st.you].kredits) { UI.warn('指挥点不足'); return false; }
       if (v.type === 'order' || v.type === 'gotcha' || v.type === 'location') {
         // 指令卡不支持拖拽落位（点击使用）
         return false;
       }
       if (g && g.hasRoomFor && !g.hasRoomFor(g.players[st.you].hand[d.handIndex])) {
-        UI.hint('战场没有空位');
+        UI.warn('战场没有空位');
         return false;
       }
       return true;
@@ -911,6 +1002,7 @@
     document.body.appendChild(ghost);
     drag.ghost = ghost;
     drag.el.classList.add('dragging-src');
+    SFX.play('select');
     hidePopup();
 
     // 高亮可用落点
@@ -1014,7 +1106,7 @@
             UI.doAction('attack', { uid: d.v.uid, target: 0 });
             acted = true;
           } else {
-            UI.hint('无法攻击敌方总部');
+            UI.warn('无法攻击敌方总部');
           }
         } else if (t.kind === 'front' || (t.slot && t.kind === 'support')) {
           const g = UI.engine;
@@ -1039,7 +1131,7 @@
 
     if (!acted && d.isHand && d.moved) {
       // 拖到无效区域：飘回
-      UI.hint('拖到前线或支援阵线才能部署');
+      UI.warn('拖到前线或支援阵线才能部署');
     }
 
     cleanupDrag();
