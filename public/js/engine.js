@@ -92,7 +92,9 @@
     /** 实际行动费用：支持临时设定（_opCostSet）与增减（_opCostMod） */
     get effOpCost() {
       if (this._opCostSet != null) return Math.max(0, this._opCostSet);
-      return Math.max(0, (this.opCost || 0) + (this._opCostMod || 0));
+      const g = this._game;
+      const aura = (g && g.teamAuraFor) ? g.teamAuraFor(this, 'operate') : 0;
+      return Math.max(0, (this.opCost || 0) + (this._opCostMod || 0) + aura);
     }
     get isUnit() { return ['infantry', 'tank', 'artillery', 'fighter', 'bomber'].includes(this.type); }
     has(kw) { return this.keywords.has(kw); }
@@ -146,9 +148,12 @@
       if (clause.ops.length) clauses.push(clause);
       else {
         // try whole-sentence parse (e.g. "When X, Y." trigger patterns)
-        const trig = parseTriggerSentence(sent);
+        // 前缀（Deployment:/Pincer: 等）已剥离时用 body 解析，移植回 kind
+        const trig = parseTriggerSentence(kind !== 'static' || body !== sent ? body : sent);
         if (trig) {
-          clauses.push(...(Array.isArray(trig) ? trig : [trig]));
+          const arr = Array.isArray(trig) ? trig : [trig];
+          if (kind !== 'static') for (const t2 of arr) t2.kind = kind;
+          clauses.push(...arr);
           continue;
         }
       }
@@ -320,6 +325,41 @@
     return ops;
   }
 
+  /** 光环主语短语 → 筛选条件（"other tanks" / "ground units with 4 or more attack"） */
+  function auraFilter(subj) {
+    const t = String(subj || '').toLowerCase();
+    const f = {};
+    if (/\bother\b/.test(t)) f.other = true;
+    if (/\bground\b/.test(t)) f.ground = true;
+    if (/\bair\b/.test(t)) f.air = true;
+    if (/infantry/.test(t)) f.type = 'infantry';
+    else if (/tank/.test(t)) f.type = 'tank';
+    else if (/artillery/.test(t)) f.type = 'artillery';
+    else if (/fighter/.test(t)) f.type = 'fighter';
+    else if (/bomber/.test(t)) f.type = 'bomber';
+    const nat = /(german|soviet|american|british|japanese|french|italian|polish|finnish)/.exec(t);
+    if (nat) f.nation = NAT_MAP[nat[1]];
+    const minAtk = /(\d+) or more attack/.exec(t);
+    if (minAtk) f.minAttack = +minAtk[1];
+    return f;
+  }
+
+  /** "equal to ..." 表达式 → 引擎可算的 calc 键 */
+  function calcFromText(s) {
+    const t = String(s || '').toLowerCase();
+    if (/unspent kredit/.test(t)) return { key: 'kredits' };
+    if (/cards? in (?:the )?enemy hand/.test(t)) return { key: 'enemyHandSize' };
+    if (/highest attack/.test(t)) return { key: 'highestOwnAttack' };
+    if (/german tanks in the frontline/.test(t)) return { key: 'germanTankCost' };
+    if (/its attack|this unit's attack/.test(t)) return { key: 'atk' };
+    if (/kredits spent/.test(t)) return { key: 'kreditsSpent' };
+    if (/cards? in your hand/.test(t)) return { key: 'ownHandSize' };
+    if (/number of (?:your |friendly )?units|friendly units you (?:control|have)/.test(t)) return { key: 'ownUnitCount' };
+    if (/damage (?:taken|dealt) to your hq/.test(t)) return { key: 'hqDamageThisTurn' };
+    const n = /(\d+)/.exec(t);
+    return { n: n ? +n[1] : 0 };
+  }
+
   function parseOpsRaw(s, orig) {
     const ops = [];
     const t = String(s || '').replace(/[\u2019\u2018]/g, "'").trim();
@@ -344,12 +384,118 @@
       return ops;
     }
 
+    // ================= 反向语序与动态数值（批量补齐） =================
+    // "The enemy HQ takes N damage" / "Your HQ takes N damage"
+    m = /(?:the )?enemy hq takes (\d+) damage/i.exec(t);
+    if (m) return [{ op: 'damage', n: +m[1], target: 'enemyHQ' }];
+    m = /your hq takes (\d+) damage/i.exec(t);
+    if (m) return [{ op: 'damage', n: +m[1], target: 'ownHQDamage' }];
+    m = /(?:target|an? enemy|the|a) (?:unit|ground unit|infantry|tank|artillery|air unit) takes (\d+) damage/i.exec(t);
+    if (m) return [{ op: 'damage', n: +m[1], target: 'unit' }];
+
+    // "Deal damage to X equal to <表达式>"（动态伤害）
+    m = /deal damage to (?:an? |the |target |each )?(enemy hq|hq|unit|enemy unit|all enemy units) equal to ([^.,;]+)/i.exec(t);
+    if (m) {
+      const who = m[1].toLowerCase();
+      const tgt = (who === 'enemy hq' || who === 'hq') ? 'enemyHQ'
+                : who === 'all enemy units' ? 'allEnemyUnits' : 'unit';
+      const c = calcFromText(m[2]);
+      return [{ op: 'damage', n: c.n || 0, calc: c.key, target: tgt }];
+    }
+
+    // 摧毁溢出伤害转移到敌方总部
+    if (/deal excess damage to the enemy hq/i.test(t)) return [{ op: 'excessToHq' }];
+    // 攻击伤害同时打到敌方总部（PANTHER D）
+    if (/the damage it deals is also dealt to the enemy hq/i.test(t)) return [{ op: 'splashHq' }];
+    // 受到伤害时总部回等量防御（461st / 845th RIFLES）
+    if (/your hq gets equal amount of defense/i.test(t)) return [{ op: 'hqGainFromDamage' }];
+    // 总部受到的伤害转给本单位（ROYAL ULSTER RIFLES）
+    if (/deal that amount of damage to this unit instead/i.test(t)) return [{ op: 'redirectToSelf' }];
+    // 总部回血加成（111th INDIAN BRIGADE）
+    m = /it gains (\d+) extra defense/i.exec(t);
+    if (m) return [{ op: 'hqHealBonus', n: +m[1] }];
+    // 阵亡后回到牌库顶（T-28）
+    if (/put it on top of (?:owner's |its owner's )?deck/i.test(t)) return [{ op: 'toDeckTop' }];
+    // 抽一张弃一张（34th INFANTRY REGIMENT）
+    if (/draw and discard the top card/i.test(t)) return [{ op: 'cycleTop' }];
+    // 攻击力翻倍（RED BULL）
+    if (/double the attack of this unit/i.test(t)) return [{ op: 'doubleAttack' }];
+    // 随机友方空中单位获得免疫（P-61 BLACK WIDOW）
+    if (/give a random friendly air unit immune/i.test(t)) return [{ op: 'grantImmune', target: 'randomFriendlyAir' }];
+    // 重置防守方攻击（37mm M1 AA GUN）
+    if (/reset the attack of the defending unit/i.test(t)) return [{ op: 'resetDefender' }];
+    // 敌方手牌整体涨价（LANCASTER B.III）
+    m = /cards in enemy hand cost \+(\d+)/i.exec(t);
+    if (m) return [{ op: 'handTaxAll', n: +m[1] }];
+    // 敌方弃牌（随机 / 指定兵种）
+    if (/the enemy discards? (?:a |one )?(?:random )?card/i.test(t)) {
+      return [{ op: 'discard', n: 1, random: true }];
+    }
+    m = /the enemy discards? (?:a |one )?(?:random )?(bomber|fighter|infantry|tank|artillery|order)/i.exec(t);
+    if (m) return [{ op: 'discard', n: 1, random: true, typed: m[1].toLowerCase() }];
+
+    // ---- 老兵化（"Becomes Veteran when ..." 的效果段）----
+    if (/^becomes? veteran\b/i.test(t)) return [{ op: 'veteran' }];
+    // ---- 每次攻击后行动费 +N（BF 110 C / PANZER IV-J / KATZMANN）----
+    m = /increase (?:the )?operation cost by (\d+)(?: until end of turn)? (?:after|each time)/i.exec(t);
+    if (m) return [{ op: 'opCostOnAttack', n: +m[1] }];
+    // ---- 移动后仍可攻击 ----
+    if (/can move and attack during the same turn/i.test(t)) return [{ op: 'moveAndAttack' }];
+    // ---- 击杀后可再次行动（WINDHUND DIVISION）----
+    if (/can operate again after it attacks and destroys a unit/i.test(t)) return [{ op: 'operateOnKill' }];
+    // ---- 攻击后离场，下回合开始归来（SALAMANDER）----
+    if (/remove from the battlefield after it attacks/i.test(t)) return [{ op: 'bunkerAfterAttack' }];
+    // ---- 队伍级光环：关键词 / 行动费 / 部署费 ----
+    m = /^(all )?(your|enemy) (other )?(.{0,44}?) (?:units? |cards? )?(?:in hand and deck )?(?:have|has|gain|gains|gets?) (blitz|guard|fury|smokescreen|ambush|shock)\b/i.exec(t);
+    if (m) {
+      return [{ op: 'teamAura', kind: 'keyword', kw: m[5].toLowerCase(), side: m[2].toLowerCase() === 'enemy' ? 'enemy' : 'own', f: auraFilter(m[3] + ' ' + m[4]) }];
+    }
+    m = /^(all )?(your|enemy) (other )?(.{0,44}?) (?:units? )?(?:in hand and deck )?(?:operate|operation cost) (?:for )?(?:free|(\+?)(\d+) (less|more))/i.exec(t);
+    if (m) {
+      const free = /free/i.test(m[0]);
+      const n = free ? -99 : (m[7] ? +m[7] : 0);
+      const delta = free ? -50 : (/less/i.test(m[8]) ? -n : n);
+      return [{ op: 'teamAura', kind: 'operate', delta, side: m[2].toLowerCase() === 'enemy' ? 'enemy' : 'own', f: auraFilter(m[3] + ' ' + m[4]) }];
+    }
+    m = /^(all )?(your|enemy) (other )?(.{0,44}?) (?:units? |cards? )?(?:in hand and deck )?costs? (\+?)(\d+) (less|more)?(?: to deploy)?/i.exec(t);
+    if (m) {
+      const n = +m[6];
+      const delta = /less/i.test(m[7] || '') ? -n : n;
+      return [{ op: 'teamAura', kind: 'deploy', delta, side: m[2].toLowerCase() === 'enemy' ? 'enemy' : 'own', f: auraFilter(m[3] + ' ' + m[4]) }];
+    }
+    // ---- 被本单位攻击的单位失去关键词（T19 HOWITZER）----
+    m = /units? attacked by [a-z0-9 .'\-]+ lose (guard|blitz|fury|smokescreen|ambush|shock)/i.exec(t);
+    if (m) return [{ op: 'stripKwOnAttack', kw: m[1].toLowerCase() }];
+    // ---- 伤害等于自身攻击打到敌方总部（TSURUGA 的 Destruction）----
+    if (/deal damage equal to (?:its|this unit's) attack to the enemy hq/i.test(t)) return [{ op: 'damage', n: 0, calc: 'atk', target: 'enemyHQ' }];
+    // ---- 从牌库抽指定名字的卡（24th CAVALRY / 32nd INFANTRY）----
+    m = /draw an? ([A-Z0-9][A-Z0-9 .'\-]+?) from your deck/i.exec(origT);
+    if (m) return [{ op: 'addHand', name: m[1].trim(), fromDeck: true }];
+    // ---- 抽多兵种（GATHERING STORM）----
+    m = /draw an? random ([a-z, ]+?) from your deck/i.exec(t);
+    if (m && /,|\band\b/.test(m[1])) {
+      const types = m[1].split(/,|\band\b/).map(s => s.trim()).filter(s => /^(infantry|tank|artillery|fighter|bomber)$/.test(s));
+      if (types.length) return [{ op: 'drawTypedMulti', types }];
+    }
+    // ---- 条件关键词（"Has Blitz if it has 3 or more attack"）----
+    m = /^(?:it )?(?:has|gets?|gains?) (blitz|guard|fury|smokescreen|ambush|shock) if it has (\d+) or more attack/i.exec(t);
+    if (m) return [{ op: 'keyword', kws: [m[1].toLowerCase()], target: 'self', self: true, cond: { c: 'attackAtLeast', n: +m[2] } }];
+    // ---- 总部减伤 / 下限 / 烟幕 ----
+    m = /your hq takes (\d+) less damage for each of your units with (\d+) or more attack/i.exec(t);
+    if (m) return [{ op: 'hqDmgReduce', n: +m[1], per: +m[2] }];
+    m = /your hq cannot lose more than (\d+) defense each turn/i.exec(t);
+    if (m) return [{ op: 'hqLossCap', n: +m[1] }];
+    m = /your hq has (blitz|guard|fury|smokescreen|ambush|shock)/i.exec(t);
+    if (m) return [{ op: 'hqKeyword', kws: [m[1].toLowerCase()] }];
+    // ---- 全局出牌限制 ----
+    if (/players can only give one order each turn/i.test(t)) return [{ op: 'orderLimit', n: 1 }];
+    if (/the first card played by the enemy each turn costs double/i.test(t)) return [{ op: 'enemyFirstCardDouble' }];
     // "Deal damage to the enemy HQ equal to X"
     if (/deal damage to the enemy hq/i.test(t)) ops.push({ op: 'damage', n: 'atk', target: 'enemyHQ' });
 
     // "Destroy target X" / "Destroy a unit" / "Destroy an enemy unit"
     if (/\bdestroy\b/i.test(t)) {
-      let tgt = 'unit';
+      let tgt = /destroy that unit|destroy it\b/i.test(t) ? 'enemyUnit' : 'unit';
       if (/destroy all enem/i.test(t)) tgt = 'allEnemyUnits';
       else if (/destroy (?:a|the|target)? ?(tank|air unit|infantry|artillery|fighter|bomber)/i.test(t)) tgt = 'typed';
       ops.push({ op: 'destroy', target: tgt });
@@ -556,6 +702,13 @@
       ops.push({ op: 'keyword', kws: [m[2].toLowerCase()], target: 'self', self: true });
       return ops;
     }
+    // "Has Blitz and Guard if ..." / "Gets X and Y"（条件由全局 if 剥离自动挂上）
+    m = /\b(?:gets?|gains?|has|have) (blitz|guard|fury|smokescreen|ambush|shock) and (blitz|guard|fury|smokescreen|ambush|shock)\b/i.exec(t);
+    if (m) {
+      ops.push({ op: 'keyword', kws: [m[1].toLowerCase()], target: 'self', self: true });
+      ops.push({ op: 'keyword', kws: [m[2].toLowerCase()], target: 'self', self: true });
+      return ops;
+    }
     // "it gets Fury until end of turn"（HUDSON Mk III 触发效果）
     m = /^(?:it |this unit )?(?:gets?|gains?) (blitz|guard|fury|smokescreen|ambush|shock) until/i.exec(t);
     if (m) {
@@ -577,7 +730,7 @@
 
     // "Give [target] +X+Y" / "Gets +X+Y" / "Your units get +X+Y" / "Give your British units +2 defense"
     // 目标短语交给 describeTarget 一次性解析（含 with Guard / in the frontline / 国家名等修饰）。
-    m = /(?:give|gives|gets|get|gaining|receive|receives|has|have) (?:a |an |the |target |random |all |another )?(friendly |enemy |random friendly |random enemy |your )?([a-z0-9 \-']{0,38}?) ?([+-]?\d+)[+\-]([+-]?\d+)/i.exec(t);
+    m = /(?:give|gives|gets|get|gains|gain|gaining|receive|receives|has|have) (?:a |an |the |target |random |all |another )?(friendly |enemy |random friendly |random enemy |your )?([a-z0-9 \-']{0,38}?) ?([+-]?\d+)[+\-]([+-]?\d+)/i.exec(t);
     if (m) {
       const who = ((m[1] || '') + ' ' + (m[2] || '')).toLowerCase();
       const f = describeTarget(who, t);
@@ -715,7 +868,7 @@
     if (m) { ops.push({ op: 'buff', a: +m[1], d: +m[2], target: 'randomFriendly' }); return ops; }
 
     // --- 单数值 buff：+N attack / +N defense（含负值） ---
-    m = /(?:give|gives|gets|get|gaining|receive|receives|has|have) (?:a |an |the |target |random |all |another )?(friendly |enemy |random friendly |random enemy |your )?([a-z \-']{0,28}?) ?\+?([+-]?\d+) (attack|defense)/i.exec(t);
+    m = /(?:give|gives|gets|get|gains|gain|gaining|receive|receives|has|have) (?:a |an |the |target |random |all |another )?(friendly |enemy |random friendly |random enemy |your )?([a-z \-']{0,28}?) ?\+?([+-]?\d+) (attack|defense)/i.exec(t);
     if (m && !/\bfor each\b/i.test(t)) {
       const who = ((m[1] || '') + ' ' + (m[2] || '')).toLowerCase();
       const f = describeTarget(who, t);
@@ -1101,76 +1254,126 @@
   }
 
   // "When X, Y." / "After X, Y." / "At the end of turn, X."
-  function parseTriggerSentence(sent) {
-    // 复合句拆分："Gets +1+1 when you play a Japanese card, and Guard when attack is 10+."
-    const compSplit = /,\s*(?:and\s+)?(?=[^,.]{0,40}\bwhen\b)/i;
-    if (compSplit.test(sent)) {
-      const idx = sent.search(compSplit);
-      const first = sent.slice(0, idx).trim();
-      const rest = sent.slice(idx).replace(/^,\s*(?:and\s+)?/i, '').trim();
-      const a = parseTriggerSentence(first.endsWith('.') ? first : first + '.');
-      const b = parseTriggerSentence(rest.endsWith('.') ? rest : rest + '.');
-      if (a && b) return [a, b].flat();
-      if (a) return a;
-      if (b) return b;
+  // ---- 触发事件前缀表（先长后短，命中即停）：返回 { event, cond, len } ----
+  const NAT_MAP = { german: 'Germany', soviet: 'Soviet', american: 'USA', us: 'USA', british: 'Britain',
+                    japanese: 'Japan', french: 'France', polish: 'Poland', finnish: 'Finland',
+                    italian: 'Italy', anzac: 'Anzac' };
+  const TRIGGER_EVENTS = [
+    { re: /this unit attacks? and destroys? (?:a |an |another |the )?(?:enemy )?(ground )?unit\b/i, ev: 'selfKill' },
+    { re: /this unit destroys? (?:a |an |another |the )?(?:enemy )?(ground )?unit\b/i, ev: 'selfKill' },
+    { re: /you attack and destroy a ground unit\b/i, ev: 'selfKill' },
+    { re: /this unit attacks? (?:the )?enemy(?:'s)? hq\b/i, ev: 'selfAttackHQ' },
+    { re: /this unit damages? (?:a |an |the )?(?:enemy )?hq\b/i, ev: 'selfDamageHq' },
+    { re: /this unit attacks? (?:an? |the )?pinned unit\b/i, ev: 'selfAttack', cond: { c: 'targetPinned' } },
+    { re: /this unit attacks?\b/i, ev: 'selfAttack' },
+    { re: /this unit is dealt damage\b|^this unit takes damage\b/i, ev: 'selfDamaged' },
+    { re: /this unit (?:is destroyed|dies)\b/i, ev: 'selfDestroy' },
+    { re: /this unit moves? into the frontline\b/i, ev: 'selfMoveFront' },
+    { re: /this unit becomes veteran\b/i, ev: 'becomesVeteran' },
+    { re: /you play an? ([a-z]+) card\b/i, ev: 'ownCardPlayed', cond: m => ({ c: 'nationPlayed', nation: NAT_MAP[(m[1] || '').toLowerCase()] || m[1] }) },
+    { re: /you deploy or add a guard unit\b/i, ev: 'ownGuardDeploy' },
+    { re: /you give an? order\b/i, ev: 'ownOrder' },
+    { re: /your hq takes damage\b/i, ev: 'ownHqDamaged' },
+    { re: /your hq gains? (?:defense|defence)\b/i, ev: 'ownHqHealed' },
+    { re: /(?:the )?enemy hq takes damage\b/i, ev: 'enemyHqDamaged' },
+    { re: /the enemy deploys?\b/i, ev: 'enemyDeploy' },
+    { re: /the enemy (?:plays?|gives? an? order)\b/i, ev: 'enemyOrder' },
+    { re: /the enemy draws?\b/i, ev: 'enemyDraw' },
+    { re: /the enemy discards?\b/i, ev: 'enemyDiscard' },
+    { re: /(?:targeted|chosen) unit deals? damage\b/i, ev: 'chosenTargetDamaged' },
+    { re: /attack is (\d+)\+/i, ev: 'selfAttack10', cond: m => ({ c: 'attackAtLeast', n: +m[1] }) },
+  ];
+
+  /** 触发事件段的主语归一化：卡名/it → "this unit"，其余（you/the enemy…）保持原样 */
+  function normalizeTriggerSubject(body) {
+    if (/^(this unit|you|your|the |enemy|players|targeted|chosen|attack|a |an )\b/i.test(body)) {
+      return body.replace(/^it\b/i, 'this unit');
     }
-    // 结构 A（旧格式）：句子以 When/After/At... 开头 —— 事件在第一个逗号前，效果在后
-    const leadM = /^(when|whenever|after|at the end of (?:your |the )?turn|at the start of (?:your |the )?turn)\b\s*(.+)$/i.exec(sent.trim());
-    // 结构 B（新格式）："效果 when 事件" —— HUDSON / 15th RECCE 等
-    const wm = !leadM ? /\bwhen\s+(.+)$/i.exec(sent.trim()) : null;
-    let effect = null, whenText = null, when = null;
-    if (leadM) {
-      when = leadM[1].toLowerCase();
-      const ci = leadM[2].indexOf(',');
-      if (ci >= 0) {
-        whenText = leadM[2].slice(0, ci).replace(/[.!?]+$/, '').trim();
-        effect = leadM[2].slice(ci + 1).trim();
-      } else {
-        whenText = leadM[2].replace(/[.!?]+$/, '').trim();
-        effect = whenText;   // 无逗号：整句是事件，效果视作无 op（多半 return null）
-      }
-    } else if (wm) {
-      effect = sent.slice(0, wm.index).trim();
-      whenText = wm[1].replace(/[.!?]+$/, '').trim();
-    } else return null;
-    let event = null, cond = null, m = null;
-    if (/attacks? and destroys? .*unit/i.test(whenText)) event = 'selfKill';
-    else if (/this unit is dealt damage|this unit takes damage/i.test(whenText)) event = 'selfDamaged';
-    else if (/destroys? (?:a |an |another |the )?(?:enemy )?unit/i.test(whenText)) event = 'selfKill';
-    else if (/moves? into the frontline/i.test(whenText)) event = 'selfMoveFront';
-    else if (/you deploy or add a guard unit/i.test(whenText)) event = 'ownGuardDeploy';
-    else if ((m = /you play an? ([a-z]+) card/i.exec(whenText))) {
-      event = 'ownCardPlayed';
-      const natMap = { german: 'Germany', soviet: 'Soviet', american: 'USA', us: 'USA', british: 'Britain', japanese: 'Japan', french: 'France', polish: 'Poland', finnish: 'Finland', italian: 'Italy' };
-      cond = { c: 'nationPlayed', nation: natMap[m[1].toLowerCase()] || m[1] };
+    if (/^it\b/i.test(body)) return body.replace(/^it\b/i, 'this unit');
+    const m = /^(.{1,32}?)\s+(?=(?:attacks?|destroys?|is |dies|moves?|becomes|damages?|takes?|discards?|draws?|deploys?|plays?|gains?|gets?|kills?)\b)/i.exec(body);
+    if (m) return 'this unit ' + body.slice(m[1].length).trim();
+    return body;
+  }
+
+  function matchTriggerEvent(text) {
+    for (const p of TRIGGER_EVENTS) {
+      const m = p.re.exec(text);
+      if (!m) continue;
+      // 主语可能是卡名（"Hudson destroys a unit"）或代词（"it moves into…"），
+      // 只接受句首 40 字符内的命中，避免把效果句里的词误当事件
+      if (m.index > 40) continue;
+      return {
+        event: p.ev,
+        cond: p.cond ? (typeof p.cond === 'function' ? p.cond(m) : p.cond) : null,
+        len: m.index + m[0].length,
+      };
     }
-    else if (/your hq takes damage/i.test(whenText)) event = 'ownHqDamaged';
-    else if (/(?:targeted|chosen) unit deals? damage/i.test(whenText)) event = 'chosenTargetDamaged';
-    else if ((m = /attack is (\d+)\+/i.exec(whenText))) { event = 'selfAttack10'; cond = { c: 'attackAtLeast', n: +m[1] }; }
-    else if (/^(?:the )?enemy (?:deploys|plays)/i.test(whenText)) event = /deploys/i.test(whenText) ? 'enemyDeploy' : 'enemyOrder';
-    else if (/this unit becomes veteran/i.test(whenText)) event = 'becomesVeteran';
-    else if (/^(?:the )?enemy draws/i.test(whenText)) event = 'enemyDraw';
-    else if (/at the end of turn/i.test(whenText) || when === 'at the end of turn' || when === 'at the end of your turn') event = 'endOfTurn';
-    else if (/at the start of/i.test(whenText) || when === 'at the start of turn' || when === 'at the start of your turn') event = 'startOfTurn';
-    else if (/^(?:this unit )?attacks?(?: the)? (?:enemy |enemy's )?hq/i.test(whenText)) event = 'selfAttackHQ';
-    else if (/^(?:this unit )?attacks$/i.test(whenText.trim()) || /after this unit attacks/i.test(whenText)) event = 'selfAttack';
-    else if (/this unit (is destroyed|dies)/i.test(whenText)) event = 'selfDestroy';
-    if (!event) return null;
-    let ops = parseOps(effect);
-    if (!ops.length) ops = parseOps(effect.replace(/^[a-z0-9 .'\-]+?\s+(?=gets?|gains?|deals?|destroys?)/i, ''));
+    return null;
+  }
+
+  function buildTrigger(event, cond, effectText, raw) {
+    const eff = String(effectText || '').replace(/^[,:;]\s*/, '').trim();
+    if (!eff) return null;
+    let ops = parseOps(eff);
+    if (!ops.length) ops = parseOps(eff.replace(/^[a-z0-9 .'\-]+?\s+(?=gets?|gains?|deals?|destroys?|draws?)/i, ''));
     if (!ops.length) {
       // 触发效果只有裸关键词（如 "Guard"）
-      const km = /^(blitz|guard|fury|smokescreen|ambush|shock)\b\.?$/i.exec(effect.trim());
+      const km = /^(blitz|guard|fury|smokescreen|ambush|shock)\b\.?$/i.exec(eff);
       if (km) ops = [{ op: 'keyword', kws: [km[1].toLowerCase()], target: 'self', self: true }];
     }
     if (!ops.length) return null;
-    // 触发效果里没有写明目标时，增益类默认作用于自身（句子主语就是这张卡）；
-    // 伤害/摧毁类保持通用目标解析，避免"对它造成伤害"被误改成打自己
+    // 触发效果里没写明目标时，增益类默认作用于自身；伤害/摧毁类保持通用目标解析
     for (const o of ops) {
       if (!['buff', 'keyword', 'buffPer'].includes(o.op)) continue;
       if (!o.target || o.target === 'unit') { o.target = 'self'; o.self = true; }
     }
-    return { kind: 'trigger', event, when: whenText, text: sent, cond, ops };
+    return { kind: 'trigger', event, when: raw, text: raw, cond: cond || null, ops };
+  }
+
+  function parseTriggerSentence(sent) {
+    const raw = String(sent || '').trim().replace(/[.!?]+$/, '');
+    if (!raw) return null;
+
+    // 复合句拆分："Gets +1+1 when you play a Japanese card, and Guard when attack is 10+."
+    const compSplit = /,\s*(?:and\s+)?(?=[^,.]{0,40}\bwhen\b)/i;
+    if (compSplit.test(raw)) {
+      const idx = raw.search(compSplit);
+      const first = raw.slice(0, idx).trim();
+      const rest = raw.slice(idx).replace(/^,\s*(?:and\s+)?/i, '').trim();
+      const a = parseTriggerSentence(first);
+      const b = parseTriggerSentence(rest);
+      if (a && b) return [a, b].flat();
+      if (a) return a;
+      if (b) return b;
+    }
+
+    // ① "At the start/end of your turn ..." —— 效果紧跟其后（有无逗号均可）
+    let m = /^(?:at|on) the (start|end) of (?:your|the|each) turn\b[,:]?\s*(.*)$/i.exec(raw);
+    if (m) return buildTrigger(m[1].toLowerCase() === 'start' ? 'startOfTurn' : 'endOfTurn', null, m[2], raw);
+
+    // ② "When/Whenever/After <事件>[,] <效果>"
+    m = /^(?:when|whenever|after)\b\s+(.+)$/i.exec(raw);
+    if (m) {
+      const body = normalizeTriggerSubject(m[1]);
+      const hit = matchTriggerEvent(body);
+      if (!hit) return null;
+      return buildTrigger(hit.event, hit.cond, body.slice(hit.len), raw);
+    }
+
+    // ③ "<效果> when/after <事件>" —— 效果在前（HUDSON / STUKA 87G 等）
+    const wm = /\b(when|after|whenever)\s+(.+)$/i.exec(raw);
+    if (wm && wm.index > 0) {
+      const effectText = raw.slice(0, wm.index).trim();
+      const evText = normalizeTriggerSubject(wm[2]);
+      const hit = matchTriggerEvent(evText);
+      if (hit) return buildTrigger(hit.event, hit.cond, effectText, raw);
+      // 特例："... after giving an order"（你给出指令时）
+      if (/^(?:giving|you give)\s+an?\s+order\b/i.test(evText)) {
+        return buildTrigger('ownOrder', null, effectText, raw);
+      }
+      return null;
+    }
+    return null;
   }
 
   // ---------------- Conditions ----------------
@@ -1208,6 +1411,10 @@
           if (isGround) return u.type === 'infantry' || u.type === 'tank' || u.type === 'artillery';
           return u.type === cond.type;
         });
+      }
+      case 'targetPinned': {
+        const t = ctx && ctx.target != null ? game.find(ctx.target) : null;
+        return !!(t && (t._pinned || t._stunned));
       }
       case 'nationPlayed': return true;   // 事件触发时已由 nation 过滤
       case 'attackAtLeast': return card && card.totalAttack >= (cond.n || 0);
@@ -1416,7 +1623,13 @@
         u.hasActed = false;
       }
       this.purgeTempKeywords();
+      for (const u of [...this.unitsOf(0), ...this.unitsOf(1)]) {
+        if (u._tempImmune != null && u._tempImmune < this.turn * 2 + this.current) {
+          u._immune = false; u._tempImmune = null;
+        }
+      }
       // "At the start of your turn…" 触发
+      p.hqStartDef = p.hqDef;
       this.fireTrigger('startOfTurn', { side: this.current }, u => u.owner === this.current);
       this.log(`── 第 ${this.turn} 回合（P${this.current + 1}）${p.kredits}/${p.slots} 指挥点 ──`);
       this.ev({ e: 'turn', turn: this.turn, side: this.current, kredits: p.kredits, slots: p.slots });
@@ -1534,6 +1747,18 @@
 
     damageHq(side, amount, source, isFatigue) {
       if (amount <= 0) return;
+      // "When your HQ is damaged, deal that amount of damage to this unit instead"
+      if (!isFatigue) {
+        const redirect = this.unitsOf(side).find(u => u._hqDamageRedirect);
+        if (redirect) {
+          this.log(`${redirect.name} 替总部承受 ${amount} 点伤害`);
+          this.damageCard(redirect, amount, source);
+          const pp0 = this.players[side];
+          pp0.hqDamagedThisTurn += amount;
+          this.bumpHandWatches('ownHqDamaged', side);
+          return;
+        }
+      }
       const p = this.players[side];
       // 临时护甲先吸收（hqBuff）
       if (!isFatigue && p.hqArmor > 0) {
@@ -1541,6 +1766,18 @@
         p.hqArmor -= absorbed;
         amount -= absorbed;
         if (absorbed > 0) this.log(`总部护甲吸收 ${absorbed} 点伤害（剩余护甲 ${p.hqArmor}）`);
+        if (amount <= 0) return;
+      }
+      // 总部减伤（M6：每个 4+ 攻击的我方单位减 1）
+      if (!isFatigue && p._hqDmgReduce) {
+        const red = Math.min(amount, p._hqDmgReduce);
+        if (red > 0) { amount -= red; this.log(`总部伤害减免 ${red} 点`); if (amount <= 0) return; }
+      }
+      // 单回合损失上限（SEAGULL）
+      if (!isFatigue && p._hqLossCap) {
+        const lost = p.hqStartDef != null ? Math.max(0, p.hqStartDef - p.hqDef) : 0;
+        const room = Math.max(0, p._hqLossCap - lost);
+        if (amount > room) { this.log(`总部每回合最多损失 ${p._hqLossCap} 点`); amount = room; }
         if (amount <= 0) return;
       }
       p.hqDef -= amount;
@@ -1557,6 +1794,11 @@
       // 己方总部受击触发（456th RIFLE REGIMENT：+1+1 和守护）
       if (!isFatigue && !this.done) {
         this.fireTrigger('ownHqDamaged', { side, amount }, u => u.owner === side);
+        // "When the enemy HQ takes damage" —— 对 1-side 的单位而言，敌方总部就是 side
+        this.fireTrigger('enemyHqDamaged', { side, amount }, u => u.owner === 1 - side);
+        if (source && source.isUnit) {
+          this.fireTrigger('selfDamageHq', { uid: source.uid }, u => u.uid === source.uid);
+        }
       }
       if (p.hqDef <= 0) {
         p.hqDef = 0;
@@ -1617,6 +1859,20 @@
         const b = this.players[c.owner].board;
         b.splice(b.indexOf(c), 1);
       }
+      if (c._toDeckTop) {
+        const dk = this.players[c.owner].deck;
+        const inst = new CardInst(c.def, c.owner, this);
+        dk.unshift(inst);
+        c.loc = 'discard';
+        c.slot = null;
+        this.players[c.owner].discard.push(c);
+        this.ev({ e: 'death', uid: c.uid, name: c.name, owner: c.owner });
+        this.log(`${c.name} 被摧毁，回到牌库顶`);
+        this.applyAuras();
+        this.players[c.owner]._lostUnitThisTurn = true;
+        this.bumpHandWatches('ownUnitLost', c.owner);
+        return;
+      }
       c.loc = 'discard';
       c.slot = null;
       c.defense = c.defense; // keep damaged value
@@ -1648,6 +1904,9 @@
         + (c.type === 'order' && !(p.ordersPlayedThisTurn > 0) ? (p._firstOrderDiscount || 0) : 0)
         + (c.type === 'order' ? (p._handTaxOrder || 0) : 0)
         + ((c.type === 'gotcha') ? (p._handTaxGotcha || 0) : 0)
+        + (p._handTaxAll || 0)
+        + this.teamAuraFor(c, 'deploy')
+        + ((this._enemyFirstCardDouble && p.playedThisTurn === 0 && p._enemyFirstDoubleOwner) ? c.cost : 0)
         + ((/deploys? for 0 kredits if a friendly unit was destroyed this turn/i.test(c.text || '') && p._lostUnitThisTurn) ? -(c.cost || 0) : 0);
       const costNow = Math.max(0, c.cost + extraCost);
       if (costNow > p.kredits) return { ok: false, error: '指挥点不足' };
@@ -1685,6 +1944,9 @@
         return { ok: false, error: '本回合无法使用指令' };
       }
       if (c.type === 'order') {
+        if (this._orderLimit && p.ordersPlayedThisTurn >= this._orderLimit) {
+          return { ok: false, error: `本回合最多给出 ${this._orderLimit} 张指令` };
+        }
         p.ordersPlayedThisTurn++;
         c.loc = 'discard';
         p.discard.push(c);
@@ -1693,6 +1955,8 @@
         this.execOrderText(c, ctx);
         this.bumpHandWatches('order', side);
         this.fireTrigger('ownCardPlayed', { owner: side, nation: c.nation }, u => u.owner === side);
+        this.fireTrigger('ownOrder', { owner: side }, u => u.owner === side);
+        this.fireTrigger('enemyOrder', { owner: side }, u => u.owner !== side);
         return { ok: true };
       }
 
@@ -1751,7 +2015,7 @@
       if (!c.isUnit || c.owner !== this.current || this.done) return false;
       if (c.hasMoved) return false;
       if (!c.canOperate()) return false;
-      if (c.hasAttacked && !(c.type === 'tank')) return false;
+      if (c.hasAttacked && !(c.type === 'tank') && !c._moveAndAttack) return false;
       if (toFront) {
         if (c.loc === 'front') return false;
         if (!this.canEnterFrontline(c.owner)) return false;
@@ -1856,7 +2120,7 @@
       if (c._noAttack) return false;
       if (c.attacksLeft <= 0) return false;
       if (!c.canOperate()) return false;
-      if (c.hasMoved && c.type !== 'tank') return false;
+      if (c.hasMoved && c.type !== 'tank' && !c._moveAndAttack) return false;
       if (c.totalAttack <= 0) return false;
       return this.attackTargets(c).length > 0;
     }
@@ -1961,6 +2225,7 @@
         }
         return { ok: true };
       }
+      const defBefore = def.defense;
       const dToDef = dmg(atk, def, atkSilenced);
       let dToAtk = 0;
       // retaliation rules
@@ -1975,6 +2240,42 @@
       const atkDies = atk.defense <= 0;
       if (defDies) this.destroyCard(def, atk, true);
       if (atkDies) this.destroyCard(atk, def, true);
+      // 攻击伤害同时打到敌方总部（PANTHER D）
+      if (!atkDies && dToDef > 0 && atk._splashHq) {
+        this.log(`${atk.name} 的攻击伤害同时打到敌方总部（${dToDef}）`);
+        this.damageHq(1 - atk.owner, dToDef, atk);
+      }
+      // 摧毁目标的溢出伤害打到敌方总部（756th REGIMENT / SHTURMOVIK）
+      if (defDies && atk._excessToHq) {
+        const excess = Math.max(0, dToDef - defBefore);
+        if (excess > 0) {
+          this.log(`${atk.name} 溢出 ${excess} 点伤害打到敌方总部`);
+          this.damageHq(1 - atk.owner, excess, atk);
+        }
+      }
+      // 每次攻击后行动费 +N（BF 110 C / PANZER IV-J）
+      if (atk._opCostOnAttack) {
+        atk._opCostMod = (atk._opCostMod || 0) + atk._opCostOnAttack;
+        this.log(`${atk.name} 行动费上升至 ${atk.effOpCost}`);
+      }
+      // 击杀后可再次行动（WINDHUND DIVISION）
+      if (defDies && atk._operateOnKill) {
+        atk.attacksLeft = Math.max(atk.attacksLeft, 1);
+        atk.hasAttacked = false;
+        this.log(`${atk.name} 摧毁目标，可再次行动`);
+      }
+      // 重置防守方攻击（37mm M1 AA GUN）
+      if (atk._resetDefender && !defDies) {
+        def.attacksLeft = 0;
+        def.hasAttacked = true;
+        this.log(`${def.name} 的攻击次数被重置`);
+      }
+      // 受伤方：总部回等量防御（461st / 845th RIFLES）
+      if (dToDef > 0 && def._hqGainFromDamage) {
+        const pp2 = this.players[def.owner];
+        pp2.hqDef = Math.min(pp2.hqMaxDef, pp2.hqDef + dToDef);
+        this.log(`${def.name} 受伤，其总部回复 ${dToDef} 点防御`);
+      }
       // "Damage dealt by this unit adds equal defense to your HQ"
       if (!atkDies && dToDef > 0 && atk._hqDrain) {
         const pp = this.players[atk.owner];
@@ -2043,6 +2344,27 @@
      * 相邻费用光环重算（"左侧/右侧单位行动费 -N"）：
      * 先撤掉上次贡献，再按当前位置重算，避免重复叠加。
      */
+    /** 队伍级光环查询：返回 card 在 kind（operate/deploy）上的费用增减 */
+    teamAuraFor(card, kind) {
+      if (!card || !card.isUnit) return 0;
+      let d = 0;
+      for (const u of [...this.unitsOf(0), ...this.unitsOf(1)]) {
+        for (const a of (u._teamAuras || [])) {
+          if (a.kind !== kind) continue;
+          const appliesTo = a.side === 'enemy' ? (card.owner !== u.owner) : (card.owner === u.owner);
+          if (!appliesTo) continue;
+          if (a.f.other && u.uid === card.uid) continue;
+          if (a.f.type && card.type !== a.f.type) continue;
+          if (a.f.ground && !['infantry', 'tank', 'artillery'].includes(card.type)) continue;
+          if (a.f.air && !['fighter', 'bomber'].includes(card.type)) continue;
+          if (a.f.nation && card.nation !== a.f.nation) continue;
+          if (a.f.minAttack != null && card.totalAttack < a.f.minAttack) continue;
+          d += a.delta || 0;
+        }
+      }
+      return d;
+    }
+
     applyAuras() {
       const all = [...this.unitsOf(0), ...this.unitsOf(1)];
       for (const u of all) {
@@ -2133,6 +2455,157 @@
         }
       };
       switch (op.op) {
+        // ---- 队伍级光环（关键词 / 行动费 / 部署费）----
+        case 'teamAura': {
+          src._teamAuras = src._teamAuras || [];
+          src._teamAuras.push({ kind: op.kind, delta: op.delta || 0, kw: op.kw, side: op.side, f: op.f || {} });
+          if (op.kind === 'keyword' && op.kw) {
+            // 近似：部署时点给当前场上符合条件的目标授予关键词
+            for (const u of this.unitsOf(me)) {
+              if (u.uid === src.uid) continue;
+              if (op.f.type && u.type !== op.f.type) continue;
+              if (op.f.ground && !['infantry', 'tank', 'artillery'].includes(u.type)) continue;
+              if (op.f.air && !['fighter', 'bomber'].includes(u.type)) continue;
+              if (op.f.nation && u.nation !== op.f.nation) continue;
+              if (op.f.minAttack != null && u.totalAttack < op.f.minAttack) continue;
+              u.keywords.add(op.kw);
+            }
+            this.log(`${src.name}：我方符合条件的单位获得 ${op.kw}`);
+          } else {
+            this.log(`${src.name}：${op.kind === 'operate' ? '行动费' : '部署费'}光环 ${op.delta > 0 ? '+' : ''}${op.delta}`);
+          }
+          this.applyAuras();
+          break;
+        }
+        case 'stripKwOnAttack': {
+          src._stripKwOnAttack = op.kw;
+          this.log(`${src.name}：被其攻击的单位失去 ${op.kw}`);
+          break;
+        }
+        case 'drawTypedMulti': {
+          const p = this.players[me];
+          for (const tp of op.types) {
+            const i = p.deck.findIndex(c => c.type === tp);
+            if (i < 0) continue;
+            const c = p.deck.splice(i, 1)[0];
+            c.loc = 'hand';
+            p.hand.push(c);
+            this.log(`抽到 ${c.name}（${tp}）`);
+          }
+          break;
+        }
+        case 'hqDmgReduce': {
+          const cnt = this.unitsOf(me).filter(u => u.totalAttack >= op.per).length;
+          this.players[me]._hqDmgReduce = (op.n || 1) * cnt;
+          this.log(`总部伤害减免 ${this.players[me]._hqDmgReduce}（${op.per}+ 攻击单位 ${cnt} 个）`);
+          break;
+        }
+        case 'hqLossCap': {
+          this.players[me]._hqLossCap = op.n;
+          this.log(`总部每回合最多损失 ${op.n} 点防御`);
+          break;
+        }
+        case 'opCostOnAttack': {
+          src._opCostOnAttack = (src._opCostOnAttack || 0) + op.n;
+          this.log(`${src.name}：每次攻击后行动费 +${op.n}`);
+          break;
+        }
+        case 'moveAndAttack': {
+          src._moveAndAttack = true;
+          this.log(`${src.name}：可先移动再攻击`);
+          break;
+        }
+        case 'operateOnKill': {
+          src._operateOnKill = true;
+          this.log(`${src.name}：击杀后可再次行动`);
+          break;
+        }
+        case 'bunkerAfterAttack': {
+          src._bunkerAfterAttack = true;
+          this.log(`${src.name}：攻击后离场，下回合归来`);
+          break;
+        }
+        case 'orderLimit': {
+          this._orderLimit = op.n;
+          this.log(`每回合最多给出 ${op.n} 张指令`);
+          break;
+        }
+        case 'enemyFirstCardDouble': {
+          this._enemyFirstCardDouble = true;
+          this.players[foe]._enemyFirstDoubleOwner = true;
+          this.log('敌方每回合第一张卡费用翻倍');
+          break;
+        }
+        // ================= 批量补齐的机制 op =================
+        case 'ownHQDamage': {
+          this.damageHq(me, op.n, src);
+          break;
+        }
+        case 'excessToHq': {
+          src._excessToHq = true;
+          this.log(`${src.name}：摧毁目标后溢出伤害打到敌方总部`);
+          break;
+        }
+        case 'splashHq': {
+          src._splashHq = true;
+          this.log(`${src.name}：攻击伤害同时打到敌方总部`);
+          break;
+        }
+        case 'hqGainFromDamage': {
+          src._hqGainFromDamage = true;
+          this.log(`${src.name}：受伤时总部回复等量防御`);
+          break;
+        }
+        case 'redirectToSelf': {
+          src._hqDamageRedirect = true;
+          this.log(`${src.name}：总部受到的伤害转由本单位承担`);
+          break;
+        }
+        case 'hqHealBonus': {
+          const pp = this.players[me];
+          pp._hqHealBonus = (pp._hqHealBonus || 0) + op.n;
+          this.log(`总部恢复防御时额外 +${op.n}`);
+          break;
+        }
+        case 'toDeckTop': {
+          src._toDeckTop = true;
+          this.log(`${src.name}：阵亡后回到牌库顶`);
+          break;
+        }
+        case 'cycleTop': {
+          const p = this.players[me];
+          if (p.deck.length) {
+            const c = p.deck.shift();
+            const keep = this.rng.next() < 0.5;
+            if (keep) { p.hand.push(c); c.loc = 'hand'; this.log(`抽到 ${c.name}，保留`); }
+            else { c.loc = 'discard'; p.discard.push(c); this.log(`抽到 ${c.name}，弃掉`); }
+          }
+          break;
+        }
+        case 'doubleAttack': {
+          src.buffAttack += src.totalAttack;
+          this.log(`${src.name} 攻击力翻倍至 ${src.totalAttack}`);
+          break;
+        }
+        case 'grantImmune': {
+          const pool = this.unitsOf(me).filter(u => u.type === 'fighter' || u.type === 'bomber');
+          if (!pool.length) { this.log('没有可保护的空中单位'); break; }
+          const u = this.rng.pick(pool);
+          u._immune = true;
+          u._tempImmune = this.turn * 2 + this.current;
+          this.log(`${u.name} 本回合免疫伤害`);
+          break;
+        }
+        case 'resetDefender': {
+          src._resetDefender = true;
+          this.log(`${src.name}：攻击时重置防守方攻击次数`);
+          break;
+        }
+        case 'handTaxAll': {
+          this.players[foe]._handTaxAll = (this.players[foe]._handTaxAll || 0) + op.n;
+          this.log(`敌方手牌费用 +${op.n}`);
+          break;
+        }
         case 'damage': {
           const apply = (t, n) => {
             if (!t) return;
@@ -2147,6 +2620,10 @@
               case 'enemyHandSize': return this.players[foe].hand.length;
               case 'kreditsSpent': return this.players[me].kreditsSpent || 0;
               case 'ownUnitCount': return this.unitsOf(me).length;
+              case 'kredits': return this.players[me].kredits || 0;
+              case 'ownHandSize': return this.players[me].hand.length;
+              case 'highestOwnAttack': return this.unitsOf(me).reduce((a, u) => Math.max(a, u.totalAttack), 0);
+              case 'atk': return src.totalAttack || 0;
               case 'bombersPlus1': return this.unitsOf(me).filter(u => u.type === 'bomber').length + 1;
               case 'typesPlus1': return new Set(this.unitsOf(me).map(u => u.type)).size + 1;
               case 'the total cost of your german tanks in the frontline': case 'germanTankCost':
@@ -2392,9 +2869,11 @@
           // 永久提升：上限与当前防御同时 +N（官方 ChangeDefense(location, N, permanent)）
           if (this.hqHealBlocked()) { this.log('总部无法获得防御（效果被阻止）'); break; }
           const p = this.players[me];
+          const bonus = p._hqHealBonus || 0;
           p.hqMaxDef += op.n;
-          p.hqDef += op.n;
-          this.log(`我方总部防御 +${op.n}`);
+          p.hqDef += op.n + bonus;
+          this.log(`我方总部防御 +${op.n}${bonus ? `（加成 +${bonus}）` : ''}`);
+          this.fireTrigger('ownHqHealed', { side: me, amount: op.n }, u => u.owner === me);
           break;
         }
         case 'hqBuff': {
@@ -2828,7 +3307,11 @@
             }
           } else {
             const p = this.players[foe];
-            const cands = p.hand.filter(c => !op.maxCost || op.maxCost >= 99 || (c.cost || 0) <= op.maxCost);
+            let cands = p.hand.filter(c => !op.maxCost || op.maxCost >= 99 || (c.cost || 0) <= op.maxCost);
+            if (op.typed) {
+              const f = cands.filter(c => c.type === op.typed);
+              if (f.length) cands = f;
+            }
             if (cands.length) {
               const c = cands[Math.floor(this.rng.next() * cands.length)];
               p.hand.splice(p.hand.indexOf(c), 1);
