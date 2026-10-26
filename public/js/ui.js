@@ -1446,17 +1446,16 @@
     const dfn = v.defense != null ? v.defense : def.defense;
     const kws = (v.keywords && v.keywords.length ? v.keywords : def.keywords) || [];
     el.innerHTML = img +
-      `<div class="cp-name">${escapeHtml(v.name || def.name || '')}</div>
-       <div class="cp-meta">${escapeHtml(nationZh(v.nation || def.nation))} · ${TYPE_NAME[v.type || def.type] || ''}${def.rarity ? ' · ' + rarityZh(def.rarity) : ''}</div>
+      // 卡图本身已是中文版（含卡名/效果），这里不再重复英文名、英文效果与英文风味文本
+      (def.image ? '' : `<div class="cp-name">${escapeHtml(v.name || def.name || '')}</div>`) +
+      `<div class="cp-meta">${escapeHtml(nationZh(v.nation || def.nation))} · ${TYPE_NAME[v.type || def.type] || ''}${def.rarity ? ' · ' + rarityZh(def.rarity) : ''}</div>
        <div class="cp-stats">
          ${isUnit ? `<div class="cp-stat"><b>${atk != null ? atk : '—'}</b><span>攻击</span></div>` : ''}
          ${isUnit ? `<div class="cp-stat"><b>${dfn != null ? dfn : '—'}</b><span>防御</span></div>` : ''}
          ${def.cost != null ? `<div class="cp-stat"><b>${def.cost}</b><span>费用</span></div>` : ''}
          ${def.opCost ? `<div class="cp-stat"><b>${def.opCost}</b><span>行动费</span></div>` : ''}
        </div>
-       ${(def.text ? `<div class="cp-text">${escapeHtml(def.text)}</div>` : '')}
-       ${kws.length ? `<div class="cp-kw">${kws.map(kwZh).join(' · ')}</div>` : ''}
-       ${def.flavor ? `<div class="cp-flavor">${escapeHtml(def.flavor)}</div>` : ''}`;
+       ${kws.length ? `<div class="cp-kw">${kws.map(kwZh).join(' · ')}</div>` : ''}`;
     el.classList.remove('hidden');
     const r = el.getBoundingClientRect();
     let px = x + 22, py = y - r.height / 2;
