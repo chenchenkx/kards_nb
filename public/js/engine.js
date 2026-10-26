@@ -351,9 +351,22 @@
       const vs = dmgTargetOf(m[2]);
       if (vs) { ops.push({ op: 'dmgMod', add: +m[1], vs }); return ops; }
     }
-    // "Cannot be targeted by enemy orders"
-    if (/cannot be targeted by enemy (orders|commands)/i.test(t)) {
+    // "Cannot / Can't be targeted by enemy orders"
+    if (/can(?:no|')?t be targeted by enemy (orders|commands)/i.test(t)) {
       ops.push({ op: 'orderImmune' });
+      return ops;
+    }
+    // "Cannot be pinned [or suppressed]"
+    if (/can(?:no|')?t be (?:pinned|suppressed)(?: or (?:pinned|suppressed))?/i.test(t)) {
+      ops.push({ op: 'pinImmune' });
+      return ops;
+    }
+    // "Takes N less combat damage from ground units"
+    m = /takes? (\d+) less combat damage from (ground|air) units/i.exec(t);
+    if (m) { ops.push({ op: 'dmgTakenMod', minus: +m[1], vs: m[2].toLowerCase() }); return ops; }
+    // "Cannot be attacked by ground units while in the support line"
+    if (/can(?:no|')?t be attacked by ground units/i.test(t)) {
+      ops.push({ op: 'groundProof' });
       return ops;
     }
     // "Gain an extra kredit slot"（部署或指令都可能有）
@@ -365,6 +378,16 @@
     // "Your orders deal N damage" → 全局指令增伤
     m = /your orders deal \+?(\d+) damage/i.exec(t);
     if (m) { ops.push({ op: 'orderDmgMod', n: +m[1] }); return ops; }
+    // "Damage dealt by this unit adds equal defense to your HQ"
+    if (/damage dealt by this unit adds? (?:an )?equal (?:amount of )?defense to your hq/i.test(t)) {
+      ops.push({ op: 'hqDrain' });
+      return ops;
+    }
+    // "Units dealt combat damage by this unit are destroyed"
+    if (/units? dealt combat damage by this unit (?:are|is) destroyed/i.test(t)) {
+      ops.push({ op: 'destroyOnDamage' });
+      return ops;
+    }
     // "Reduce operation cost by N [if ...]" → 自身行动费减免
     m = /reduce (?:its |this unit's )?operation cost by (\d+)/i.exec(t);
     if (m) { ops.push({ op: 'opCostMod', n: -Math.abs(+m[1]) }); return ops; }
@@ -1605,6 +1628,8 @@
     }
 
     canAttackPair(atk, def) {
+      // 后排"不能被地面单位攻击"（C6N SAIUN / F1M2 PETE）
+      if (def._groundProof && def.loc !== 'front' && ['infantry', 'tank', 'artillery'].includes(atk.type)) return false;
       // smokescreen: cannot be attacked by units until it has acted
       if (def.has('smokescreen') && !def.hasActed) return false;
       // guard: adjacent units protected, except bombers & artillery
@@ -1688,6 +1713,13 @@
             x = m.mult > 1 ? x * m.mult : x + m.add;
           }
         }
+        // 受击方减免（"受到地面单位伤害 -1"）
+        if (d._dmgTakenMod) {
+          const mt = d._dmgTakenMod;
+          const okSrc = mt.vs === 'air' ? (a.type === 'fighter' || a.type === 'bomber')
+            : ['infantry', 'tank', 'artillery'].includes(a.type);
+          if (okSrc) x = Math.max(0, x - mt.minus);
+        }
         if (a._immune) x = 0;
         return Math.max(0, x);
       };
@@ -1732,6 +1764,17 @@
       const atkDies = atk.defense <= 0;
       if (defDies) this.destroyCard(def, atk, true);
       if (atkDies) this.destroyCard(atk, def, true);
+      // "Damage dealt by this unit adds equal defense to your HQ"
+      if (!atkDies && dToDef > 0 && atk._hqDrain) {
+        const pp = this.players[atk.owner];
+        pp.hqDef = Math.min(pp.hqMaxDef, pp.hqDef + dToDef);
+        this.log(`${atk.name} 造成伤害，总部恢复 ${dToDef} 点防御`);
+      }
+      // "Units dealt combat damage by this unit are destroyed"
+      if (!defDies && dToDef > 0 && atk._destroyOnDamage) {
+        this.log(`${atk.name} 的战斗伤害直接摧毁 ${def.name}`);
+        this.destroyCard(def, atk, true);
+      }
       return { ok: true };
     }
 
@@ -1892,6 +1935,16 @@
           this.log(`指挥点上限 +${op.n}`);
           break;
         }
+        case 'hqDrain': {
+          src._hqDrain = true;
+          this.log(`${src.name} 造成伤害时为本方总部恢复等量防御`);
+          break;
+        }
+        case 'destroyOnDamage': {
+          src._destroyOnDamage = true;
+          this.log(`${src.name} 的战斗伤害将直接摧毁目标`);
+          break;
+        }
         case 'orderDmgMod': {
           const p = this.players[me];
           p._orderDmgMod = (p._orderDmgMod || 0) + op.n;
@@ -1914,6 +1967,21 @@
           src._orderImmune = true;
           src.keywords.add('orderimmune');
           this.log(`${src.name} 不能被敌方指令指定`);
+          break;
+        }
+        case 'pinImmune': {
+          src._pinImmune = true;
+          this.log(`${src.name} 不能被压制`);
+          break;
+        }
+        case 'dmgTakenMod': {
+          src._dmgTakenMod = { minus: op.minus || 0, vs: op.vs || 'ground' };
+          this.log(`${src.name} 受到${op.vs === 'air' ? '空中' : '地面'}单位伤害 -${op.minus}`);
+          break;
+        }
+        case 'groundProof': {
+          src._groundProof = true;
+          this.log(`${src.name} 在支援阵线不会被地面单位攻击`);
           break;
         }
         case 'kredits': {
@@ -2043,7 +2111,8 @@
           break;
         }
         case 'pin': {
-          const list = op.target === 'allEnemyUnits' ? this.unitsOf(foe) : [pickUnit('enemyUnit')].filter(Boolean);
+          const list = (op.target === 'allEnemyUnits' ? this.unitsOf(foe) : [pickUnit('enemyUnit')].filter(Boolean))
+            .filter(u => !u._pinImmune);
           for (const u of list) { u._pinned = true; }
           this.log(`压制了 ${list.length} 个单位`);
           break;
