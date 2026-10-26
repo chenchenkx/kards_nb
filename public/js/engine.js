@@ -84,6 +84,8 @@
       return Math.max(0, this.attack + this.buffAttack);
     }
     get totalDefense() { return this.defense + this.buffDefense; }
+    /** 实际出牌费用：支持手牌费用增减（_costMod）、Develop 免费等 */
+    get effCost() { return Math.max(0, (this.cost || 0) + (this._costMod || 0)); }
     /** 实际行动费用：支持临时设定（_opCostSet）与增减（_opCostMod） */
     get effOpCost() {
       if (this._opCostSet != null) return Math.max(0, this._opCostSet);
@@ -131,8 +133,10 @@
       let kind = 'static', body = sent;
       const m = /^(Deployment|Destruction|Reveal|Ambush|Shock|Pincer|Forecast)\s*:\s*/i.exec(sent);
       if (m) {
-        kind = m[1].toLowerCase() === 'deployment' ? 'deployment'
-            : m[1].toLowerCase() === 'destruction' ? 'destruction' : 'static';
+        const k = m[1].toLowerCase();
+        // Pincer 单独成为一类：只有本回合打出第 2 张及以上的卡才生效
+        kind = k === 'deployment' ? 'deployment' : k === 'destruction' ? 'destruction'
+             : k === 'pincer' ? 'pincer' : 'static';
         body = sent.slice(m[0].length);
       }
       const clause = { kind, text: sent, cond: null, ops: parseOps(body) };
@@ -255,6 +259,8 @@
   /** 已知触发事件词汇表：命中才把 "when" 句让路给触发解析器（防回归） */
   const TRIGGER_EVENT_RE = new RegExp([
     'destroys? (?:a |an |another |the )?(?:enemy )?unit',
+    'attacks? and destroys? .*unit',
+    'this unit is dealt damage',
     'moves? into the frontline',
     'you deploy or add a guard unit',
     'you play an? [a-z]+ card',
@@ -372,6 +378,50 @@
     // "Gain an extra kredit slot"（部署或指令都可能有）
     if (/gain an? (?:extra )?kredit slot/i.test(t)) {
       ops.push({ op: 'slots', n: 1 });
+      return ops;
+    }
+
+    // "-1 operation cost"（回合触发的简写）与 "reduce operation cost by N"
+    m = /^\s*-(\d+) operation cost\b/i.exec(t) || /\b-(\d+) operation cost\b/i.exec(t);
+    if (m) { ops.push({ op: 'opCostMod', n: -Math.abs(+m[1]) }); return ops; }
+    // "Units attacked by this howitzer lose Guard"
+    m = /attacked by (?:this|it)[a-z ]*?lose (guard|fury|smokescreen|blitz|ambush)/i.exec(t);
+    if (m) { ops.push({ op: 'stripKwOnAttack', kw: m[1].toLowerCase() }); return ops; }
+    // "Any unit that attacks this unit takes N damage"
+    m = /(?:any )?unit that attacks this unit takes (\d+) damage/i.exec(t);
+    if (m) { ops.push({ op: 'thorns', n: +m[1] }); return ops; }
+    // "It costs the enemy N kredits to target or attack this unit"
+    m = /costs? the enemy (\d+) kredits to (?:target or attack|attack or target|target)/i.exec(t);
+    if (m) { ops.push({ op: 'enemyTax', n: +m[1] }); return ops; }
+    // "Reduce attack of this unit by N each time it attacks"
+    m = /reduce (?:the )?attack of this unit by (\d+) each time/i.exec(t);
+    if (m) { ops.push({ op: 'selfDrainOnAttack', n: +m[1] }); return ops; }
+
+    // 手牌费用修正类（最左 / 首张指令 / 敌方手牌税）
+    m = /the first order you play each turn costs? (\d+) less/i.exec(t);
+    if (m) { ops.push({ op: 'firstOrderDiscount', n: -Math.abs(+m[1]) }); return ops; }
+    m = /your left-?most card costs? (\d+) less/i.exec(t);
+    if (m) { ops.push({ op: 'leftmostCost', n: -Math.abs(+m[1]) }); return ops; }
+    m = /orders? in enemy hand costs? (\d+) more/i.exec(t);
+    if (m) { ops.push({ op: 'enemyHandTax', type: 'order', n: +m[1] }); return ops; }
+    m = /enemy countermeasures cost (\d+) more/i.exec(t);
+    if (m) { ops.push({ op: 'enemyHandTax', type: 'gotcha', n: +m[1] }); return ops; }
+
+    // 裸加成句式（Pincer: +2 attack. / +1+1）——无动词，只有数值
+    m = /^\+(\d+) (attack|defense)\.?$/i.exec(t.trim());
+    if (m) {
+      ops.push({ op: 'buff', a: m[2] === 'attack' ? +m[1] : 0, d: m[2] === 'defense' ? +m[1] : 0, target: 'self', self: true });
+      return ops;
+    }
+    m = /^\+(\d+)\+(\d+)\.?$/i.exec(t.trim());
+    if (m) {
+      ops.push({ op: 'buff', a: +m[1], d: +m[2], target: 'self', self: true });
+      return ops;
+    }
+    // 相邻费用光环："Units to the left/right of this unit operate for N less/more"
+    m = /units to the (left|right) of this unit operate for (\d+) (less|more)/i.exec(t);
+    if (m) {
+      ops.push({ op: 'auraOpCost', dir: m[1].toLowerCase(), n: m[3].toLowerCase() === 'less' ? -Math.abs(+m[2]) : +m[2] });
       return ops;
     }
 
@@ -990,7 +1040,9 @@
       whenText = wm[1].replace(/[.!?]+$/, '').trim();
     } else return null;
     let event = null, cond = null, m = null;
-    if (/destroys? (?:a |an |another |the )?(?:enemy )?unit/i.test(whenText)) event = 'selfKill';
+    if (/attacks? and destroys? .*unit/i.test(whenText)) event = 'selfKill';
+    else if (/this unit is dealt damage|this unit takes damage/i.test(whenText)) event = 'selfDamaged';
+    else if (/destroys? (?:a |an |another |the )?(?:enemy )?unit/i.test(whenText)) event = 'selfKill';
     else if (/moves? into the frontline/i.test(whenText)) event = 'selfMoveFront';
     else if (/you deploy or add a guard unit/i.test(whenText)) event = 'ownGuardDeploy';
     else if ((m = /you play an? ([a-z]+) card/i.exec(whenText))) {
@@ -1247,6 +1299,7 @@
       p.slots = Math.min(RULES.MAX_KREDITS, p.slots + 1);
       p.kredits = p.slots;
       p.ordersPlayedThisTurn = 0;
+      p.playedThisTurn = 0;
       p.hqDamagedThisTurn = 0;
       p.kreditsSpent = 0;
       if (p._kreditsNextMod) {
@@ -1413,6 +1466,8 @@
       c.defense -= amount;
       this.ev({ e: 'damage', uid: c.uid, amount });
       this.log(`${c.name} 受到 ${amount} 点伤害，剩余 ${Math.max(0, c.defense)}`);
+      // "When this unit is dealt damage…"
+      this.fireTrigger('selfDamaged', { uid: c.uid, amount }, u => u.uid === c.uid);
       // 被指定目标造成伤害触发（15th RECCE：被指定单位造成伤害时 +1+1 和守护）
       if (killer && killer.isUnit) {
         this.fireTrigger('chosenTargetDamaged', { killerUid: killer.uid, targetUid: c.uid },
@@ -1449,6 +1504,7 @@
       this.players[c.owner].discard.push(c);
       this.ev({ e: 'death', uid: c.uid, name: c.name, owner: c.owner });
       this.log(`${c.name} 被摧毁`);
+      this.applyAuras();
     }
 
     // ---------- deployment ----------
@@ -1465,7 +1521,14 @@
       const p = this.players[side];
       const c = p.hand[handIndex];
       if (!c) return { ok: false, error: '找不到该卡牌' };
-      if (c.cost > p.kredits) return { ok: false, error: '指挥点不足' };
+      // 动态费用：手牌费用增减 + 最左手牌折扣 + 首张指令折扣 + 敌方手牌税
+      const extraCost = (c._costMod || 0)
+        + (handIndex === 0 ? (p._leftmostCost || 0) : 0)
+        + (c.type === 'order' && !(p.ordersPlayedThisTurn > 0) ? (p._firstOrderDiscount || 0) : 0)
+        + (c.type === 'order' ? (p._handTaxOrder || 0) : 0)
+        + ((c.type === 'gotcha') ? (p._handTaxGotcha || 0) : 0);
+      const costNow = Math.max(0, c.cost + extraCost);
+      if (costNow > p.kredits) return { ok: false, error: '指挥点不足' };
       if (!this.hasRoomFor(c)) return { ok: false, error: '战场没有空位' };
       if (c.isUnit && opts.toFront === false && this.supportCount(c.owner) >= RULES.MAX_ROW) {
         if (!(this.canEnterFrontline(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW)) {
@@ -1477,8 +1540,9 @@
       const fromRightmost = handIndex === p.hand.length - 1;
 
       p.hand.splice(handIndex, 1);
-      p.kredits -= c.cost;
-      this.log(`P${side + 1} 使用 ${c.name}（-${c.cost} 指挥点）`);
+      p.kredits -= costNow;
+      p.kreditsSpent = (p.kreditsSpent || 0) + costNow;
+      this.log(`P${side + 1} 使用 ${c.name}（-${costNow} 指挥点）`);
 
       if (c.type === 'gotcha') {
         // activating a countermeasure: pay cost, stays in hand, hidden
@@ -1536,6 +1600,10 @@
       const ctx = { fromLeftmost, fromRightmost, target: opts.target || null };
       this.execCardText(c, 'deployment', ctx);
       this.execCardText(c, 'static', ctx);
+      // Pincer：本回合第 2 张及以上的卡才触发
+      p.playedThisTurn = (p.playedThisTurn || 0) + 1;
+      if (p.playedThisTurn >= 2) this.execCardText(c, 'pincer', ctx);
+      this.applyAuras();
       // 触发器：己方出牌 / 部署守护单位 / 直落前线 / 敌方视角的部署事件
       this.fireTrigger('ownCardPlayed', { owner: side, nation: c.nation }, u => u.owner === side && u.uid !== c.uid);
       this.fireTrigger('enemyDeploy', { owner: side, uid: c.uid }, u => u.owner !== side);
@@ -1596,6 +1664,7 @@
       }
       c.hasMoved = true;
       c.hasActed = true;
+      this.applyAuras();
       // 移入前线触发（25. PANZERGRENADIER：移入前线时获得守护）
       if (toFront) this.fireTrigger('selfMoveFront', { uid: c.uid }, u => u.uid === c.uid);
       return { ok: true };
@@ -1665,9 +1734,12 @@
       if (!atk || !this.canAttack(atk)) return { ok: false, error: '非法攻击' };
       if (!this.attackTargets(atk).includes(targetUid)) return { ok: false, error: '非法目标' };
       const p = this.players[side];
-      if (p.kredits < atk.effOpCost) return { ok: false, error: '指挥点不足' };
-      p.kredits -= atk.effOpCost;
-      p.kreditsSpent = (p.kreditsSpent || 0) + atk.effOpCost;
+      // "It costs the enemy N kredits to … attack this unit"：攻击带税目标需额外支付
+      const earlyDef = targetUid === 0 ? null : this.find(targetUid);
+      const tax = earlyDef && earlyDef._enemyTax ? earlyDef._enemyTax : 0;
+      if (p.kredits < atk.effOpCost + tax) return { ok: false, error: '指挥点不足' };
+      p.kredits -= (atk.effOpCost + tax);
+      p.kreditsSpent = (p.kreditsSpent || 0) + atk.effOpCost + tax;
       atk.hasAttacked = true;
       atk.attacksLeft -= 1;
       atk.hasActed = true;
@@ -1691,6 +1763,11 @@
       const def = this.find(targetUid);
       if (!def || def.loc === 'discard') return { ok: true };
       this.ev({ e: 'attack', from: atk.uid, to: def.uid, owner: atk.owner });
+      // "Units attacked by this unit lose Guard" 等
+      if (atk._stripKwOnAttack && def.keywords.has(atk._stripKwOnAttack)) {
+        def.keywords.delete(atk._stripKwOnAttack);
+        this.log(`${def.name} 失去关键词 ${atk._stripKwOnAttack}`);
+      }
       // "When this unit attacks…" 触发（宣告攻击时结算，覆盖伏击/冲击等分支）
       this.fireTrigger('selfAttack', { uid: atk.uid, target: def.uid }, u => u.uid === atk.uid);
 
@@ -1775,6 +1852,17 @@
         this.log(`${atk.name} 的战斗伤害直接摧毁 ${def.name}`);
         this.destroyCard(def, atk, true);
       }
+      // "Any unit that attacks this unit takes N damage"（反伤）
+      if (dToAtk >= 0 && def._thorns && !atkDies) {
+        atk.defense -= def._thorns;
+        this.log(`${atk.name} 攻击 ${def.name} 受到 ${def._thorns} 点反伤`);
+        if (atk.defense <= 0) this.destroyCard(atk, def, true);
+      }
+      // "Reduce attack of this unit by N each time it attacks"
+      if (atk._selfDrainOnAttack) {
+        atk.buffAttack -= atk._selfDrainOnAttack;
+        this.log(`${atk.name} 攻击力 -${atk._selfDrainOnAttack}`);
+      }
       return { ok: true };
     }
 
@@ -1800,8 +1888,29 @@
       }
     }
 
-    /** 总部是否持有某关键词（含临时授予，如 DEPTH CHARGES 的 HQ 烟幕） */
-    hqHas(side, kw) {
+    /**
+     * 相邻费用光环重算（"左侧/右侧单位行动费 -N"）：
+     * 先撤掉上次贡献，再按当前位置重算，避免重复叠加。
+     */
+    applyAuras() {
+      const all = [...this.unitsOf(0), ...this.unitsOf(1)];
+      for (const u of all) {
+        if (u._auraTaken) { u._opCostMod = (u._opCostMod || 0) - u._auraTaken; u._auraTaken = 0; }
+      }
+      for (const src of all) {
+        if (!src._auraOpCostDir) continue;
+        const row = src.loc === 'front' ? this.frontline : this.players[src.owner].board;
+        for (const u of row) {
+          if (u === src || u.owner !== src.owner) continue;
+          if (src._auraOpCostDir === 'left' && !(u.slot < src.slot)) continue;
+          if (src._auraOpCostDir === 'right' && !(u.slot > src.slot)) continue;
+          u._opCostMod = (u._opCostMod || 0) + src._auraOpCostVal;
+          u._auraTaken = (u._auraTaken || 0) + src._auraOpCostVal;
+        }
+      }
+    }
+
+    /** 总部是否持有某关键词（含临时授予，如 DEPTH CHARGES 的 HQ 烟幕） */    hqHas(side, kw) {
       const p = this.players[side];
       if (!p) return false;
       if (p._hqTempKws && p._hqTempKws.some(e => e.kw === kw)) return true;
@@ -1972,6 +2081,56 @@
         case 'pinImmune': {
           src._pinImmune = true;
           this.log(`${src.name} 不能被压制`);
+          break;
+        }
+        case 'stripKwOnAttack': {
+          src._stripKwOnAttack = op.kw;
+          this.log(`${src.name} 攻击的目标会失去 ${op.kw}`);
+          break;
+        }
+        case 'thorns': {
+          src._thorns = op.n;
+          this.log(`${src.name} 受到攻击时反伤 ${op.n}`);
+          break;
+        }
+        case 'enemyTax': {
+          src._enemyTax = op.n;
+          this.log(`敌方攻击/指定 ${src.name} 需额外 ${op.n} 指挥点`);
+          break;
+        }
+        case 'selfDrainOnAttack': {
+          src._selfDrainOnAttack = op.n;
+          this.log(`${src.name} 每次攻击后攻击力 -${op.n}`);
+          break;
+        }
+        case 'auraOpCost': {
+          src._auraOpCostDir = op.dir;
+          src._auraOpCostVal = op.n;
+          this.log(`${src.name}：${op.dir === 'left' ? '左侧' : '右侧'}单位行动费 ${op.n}`);
+          this.applyAuras();
+          break;
+        }
+        case 'firstOrderDiscount': {
+          const p = this.players[me];
+          p._firstOrderDiscount = (p._firstOrderDiscount || 0) + op.n;
+          this.log(`本回合首张指令费用 ${op.n}`);
+          break;
+        }
+        case 'leftmostCost': {
+          const p = this.players[me];
+          p._leftmostCost = (p._leftmostCost || 0) + op.n;
+          this.log(`最左放手牌费用 ${op.n}`);
+          break;
+        }
+        case 'enemyHandTax': {
+          const fp = this.players[foe];
+          if (op.type === 'order') {
+            fp._handTaxOrder = (fp._handTaxOrder || 0) + op.n;
+            this.log(`敌方手牌指令费用 +${op.n}`);
+          } else {
+            fp._handTaxGotcha = (fp._handTaxGotcha || 0) + op.n;
+            this.log(`敌方反制指令费用 +${op.n}`);
+          }
           break;
         }
         case 'dmgTakenMod': {

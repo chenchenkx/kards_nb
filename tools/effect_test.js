@@ -111,5 +111,67 @@ function deploy(g, side, def, opts) {
   check('解析出 selfAttack 触发', parsed.some(cl => cl.kind === 'trigger' && cl.event === 'selfAttack'));
 }
 
+
+// 5) Pincer：只有本回合第 2 张及以上的卡才获得加成
+{
+  const def = cards.find(c => /^CRUISER Mk III$/i.test(c.name)) ||
+              cards.find(c => /^pincer:\s*\+\d+ attack/i.test((c.text || '').trim()));
+  console.log('\n[5]', def && def.name, ':', def && def.text);
+  if (def) {
+    const g = game();
+    const first = deploy(g, 0, def, { front: false });   // 本回合第 1 张
+    check('Pincer 第 1 张不触发', first.buffAttack === 0, { buff: first.buffAttack });
+    const second = deploy(g, 0, def, { front: false });  // 第 2 张
+    check('Pincer 第 2 张触发', second.buffAttack > 0, { buff: second.buffAttack });
+  }
+}
+
+// 6) 手牌费用修正（敌对增费 / 减免）真正生效
+{
+  const taxCard = cards.find(c => /orders? in enemy hand costs? \d+ more/i.test(c.text || ''));
+  console.log('\n[6]', taxCard && taxCard.name, ':', taxCard && taxCard.text);
+  if (taxCard) {
+    const g = game();
+    deploy(g, 0, taxCard, { front: false });            // 我方部署，敌方手牌指令涨价
+    const order = cards.find(c => c.type === 'order' && (c.cost || 0) >= 2);
+    const oc = new Engine.CardInst(order, 1, g);
+    oc.loc = 'hand';
+    g.players[1].hand.push(oc);
+    g.players[1].kredits = 1;
+    g.current = 1;
+    const r = g.playCard(1, g.players[1].hand.indexOf(oc), {});
+    g.current = 0;
+    check('敌方指令因税无法用 1 费打出', !r.ok, { error: r.error, cost: order.cost });
+  }
+  // Develop 免费（_costMod 生效）
+  const g2 = game();
+  const dev = cards.find(c => /^develop/i.test((c.text || '').trim()) && c.type === 'order');
+  if (dev) {
+    const dc = new Engine.CardInst(dev, 0, g2);
+    dc.loc = 'hand'; dc._costMod = -(dc.cost || 0);
+    g2.players[0].hand.push(dc);
+    g2.players[0].kredits = 0;
+    const r2 = g2.playCard(0, g2.players[0].hand.indexOf(dc), {});
+    check('费用修正为 0 的卡可以免费打出', r2.ok, r2);
+  }
+}
+
+// 7) 相邻费用光环（左侧单位行动费 -1）
+{
+  const aura = cards.find(c => /units to the (left|right) of this unit operate for \d+ less/i.test(c.text || ''));
+  console.log('\n[7]', aura && aura.name, ':', aura && aura.text);
+  if (aura) {
+    const g = game();
+    // 先放普通单位（占左槽），再放光环单位 —— 光环影响它左侧的单位
+    const plainDef = db.deckPool.find(c => c.type === 'infantry' && (c.opCost || 0) >= 1 && !c.text) || pick('infantry');
+    const plain = deploy(g, 0, plainDef, { front: false });
+    const a = deploy(g, 0, aura, { front: false });
+    g.applyAuras();
+    const leftmost = plain.slot < a.slot ? plain : a;
+    const base = leftmost.opCost || 0;
+    check('光环使左侧单位行动费下降', leftmost.effOpCost < base, { now: leftmost.effOpCost, base });
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
