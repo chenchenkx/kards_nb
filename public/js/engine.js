@@ -1425,7 +1425,7 @@
         p.discard.push(c);
         this.ev({ e: 'order', uid: c.uid, name: c.name, owner: side });
         const ctx = { fromLeftmost, fromRightmost, target: opts.target || null };
-        this.execCardText(c, 'order', ctx);
+        this.execOrderText(c, ctx);
         this.fireTrigger('ownCardPlayed', { owner: side, nation: c.nation }, u => u.owner === side);
         return { ok: true };
       }
@@ -1705,6 +1705,27 @@
         this.execOps(cl.ops, c, ctx);
       }
       // also run trigger clauses that are immediate (self effects like "After this unit attacks")
+    }
+
+    /**
+     * 指令牌效果执行。
+     *
+     * parseClauses 只产出 static / deployment / destruction / trigger 四种 kind
+     * （解析层不知道卡牌类型），所以指令牌不能按 kind==='order' 取子句 ——
+     * 之前 playCard 调用 execCardText(c,'order') 永远匹配不到任何子句，
+     * 结果所有指令牌都在扣费后静默失效。这里改为：
+     *   - 执行 static 子句（指令文本本身就是效果）
+     *   - 立即执行 trigger 子句（"When you play this…" 类对指令而言就是立即结算；
+     *     需要外部事件的触发对已进弃牌堆的指令没有意义，跳过）
+     */
+    execOrderText(c, ctx) {
+      const clauses = c._parsed || (c._parsed = parseClauses(c.text));
+      for (const cl of clauses) {
+        if (cl.kind === 'destruction' || cl.kind === 'deployment') continue;
+        if (cl.kind === 'trigger' && cl.event && cl.event !== 'selfAttack' && cl.event !== 'selfDestroy') continue;
+        if (!evalCond(cl.cond, this, c, ctx)) continue;
+        this.execOps(cl.ops, c, ctx);
+      }
     }
 
     execOps(ops, src, ctx) {
@@ -2066,7 +2087,7 @@
             const cm = /\b(\d)-cost\b|\bcost (\d+)\b/.exec(kw);
             if (cm && c.cost === +(cm[1] || cm[2])) return true;
             if (kwNorm && norm(c.name).includes(kwNorm)) return true;
-            if (c.keywords && c.keywords.some(k => norm(k).includes(kwNorm))) return true;
+            if (c.keywords && [...c.keywords].some(k => norm(k).includes(kwNorm))) return true;
             if (norm(c.text).includes(kwNorm)) return true;
             return false;
           };
