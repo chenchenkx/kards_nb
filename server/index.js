@@ -108,11 +108,44 @@ function broadcast(room, msg, except) {
   }
 }
 
+/**
+ * 给某个座位算出「现在能做什么」，随 view 一起下发。
+ * 客户端联机模式下没有本地引擎，界面全靠这份数据判断是否可点/可拖。
+ */
+function legalFor(g, seat) {
+  const empty = { attacks: {}, moves: {}, canPlay: [], canEnd: false, active: false };
+  if (!g || g.done || g.current !== seat) return empty;
+  const p = g.players[seat];
+  const attacks = {};
+  const moves = {};
+  try {
+    for (const u of g.unitsOf(seat)) {
+      try { if (g.canAttack(u)) attacks[u.uid] = g.attackTargets(u) || []; } catch (e) { /* ignore */ }
+      let front = false, support = false;
+      try { front = !!g.canMove(u, true); } catch (e) { /* ignore */ }
+      try { support = !!g.canMove(u, false); } catch (e) { /* ignore */ }
+      if (front || support) moves[u.uid] = { front, support };
+    }
+  } catch (e) { /* ignore */ }
+  const canPlay = [];
+  try {
+    p.hand.forEach((c, i) => {
+      const eff = Math.max(0, (c.cost || 0) + (c._costMod || 0));
+      let room = true;
+      try { room = g.hasRoomFor(c); } catch (e) { room = true; }
+      if (eff <= p.kredits && room) canPlay.push(i);
+    });
+  } catch (e) { /* ignore */ }
+  return { attacks, moves, canPlay, canEnd: true, active: true };
+}
+
 function sendView(room) {
   if (!room.game) return;
   for (const p of room.players) {
     if (!p || p.ws.readyState !== 1) continue;
-    p.ws.send(JSON.stringify({ t: 'state', view: room.game.viewFor(p.seat) }));
+    const view = room.game.viewFor(p.seat);
+    view.legal = legalFor(room.game, p.seat);
+    p.ws.send(JSON.stringify({ t: 'state', view }));
   }
 }
 
@@ -139,10 +172,10 @@ function handleAction(room, player, msg) {
   try {
     switch (a.type) {
       case 'play':
-        res = g.playCard(seat, a.handIndex, { target: a.target });
+        res = g.playCard(seat, a.handIndex, { target: a.target, toFront: a.toFront, slot: a.slot });
         break;
       case 'move':
-        res = g.move(seat, a.uid, a.toFront);
+        res = g.move(seat, a.uid, a.toFront, a.slot);
         break;
       case 'attack':
         res = g.attack(seat, a.uid, a.target);

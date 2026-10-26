@@ -440,7 +440,45 @@
     try { engine.drainEvents(); } catch (e) { /* ignore */ }
   }
 
+  /**
+   * 联机模式没有本地引擎。UI 层需要 find/canAttack/canMove/attackTargets/hasRoomFor，
+   * 这里用服务端下发的 view.legal 造一个只读替身，界面照常高亮与判定。
+   */
+  function netShadow(view) {
+    const legal = view.legal || {};
+    const attacks = legal.attacks || {};
+    const moves = legal.moves || {};
+    const byUid = new Map();
+    const add = (c) => { if (c && c.uid != null) byUid.set(c.uid, c); };
+    (view.players || []).forEach(p => {
+      (p.hand || []).forEach(add);
+      (p.board || []).forEach(add);
+    });
+    (view.frontline || []).forEach(add);
+    const atkOf = (uid) => attacks[uid] || null;
+    return {
+      players: view.players || [],
+      isNetShadow: true,
+      find: (uid) => byUid.get(uid) || null,
+      canAttack: (inst) => !!(inst && atkOf(inst.uid)),
+      canMove: (inst, toFront) => {
+        const m = inst && moves[inst.uid];
+        return !!(m && (toFront ? m.front : m.support));
+      },
+      attackTargets: (inst) => (inst && atkOf(inst.uid)) || [],
+      hasRoomFor: () => true,
+      canEnterFrontline: () => true,
+    };
+  }
+
   function handleLocalAction(type, payload) {
+    // 联机：所有操作交给服务器裁决，本地不做任何模拟
+    if (App.netGame) {
+      if (App.busy) { UI.hint('正在结算，稍候…', 1200); return; }
+      if (type === 'endTurn') { requestEndTurn(); return; }
+      Net.action(type, payload || {});
+      return;
+    }
     const g = App.engine;
     if (!g || g.done || g.current !== 0 || App.busy) return;
     let res = { ok: false };
@@ -535,6 +573,10 @@
   }
 
   function wireNetHandlers() {
+    // 关键：联机模式也必须把 UI 的动作通道接到网络上，
+    // 否则 UI.doAction(...) 是空转，拖拽/点击出牌全部无效。
+    UI.onAction = (type, payload) => handleLocalAction(type, payload);
+
     Net.on('room', (msg) => {
       App.netGame = true;
       App.mySeat = msg.seat;
@@ -614,6 +656,7 @@
     if (v) {
       v.lanMode = App.netGame;
       v.oppName = App.oppName || (App.netGame ? '对手' : 'AI');
+      UI.engine = App.netGame ? netShadow(v) : App.engine;
       UI.render(v);
     }
     // log lines diff for local engine

@@ -29,7 +29,7 @@
 
 点 **Create 应用** 后它会自动：克隆仓库 → `npm install` → 读 `package.json` 的 `"start": "node server/index.js"` → 注入 `PORT` → 起服务。
 
-部署完打开 `https://kards-game.bonto.run`，页脚应显示 **「构建 v7」**。
+部署完打开 `https://kards-game.bonto.run`，页脚应显示 **「构建 v8」**。
 
 > 存储 256MB：项目工作区约 46MB（卡图 43MB），够用。但**不要**把卡图原仓库 `kards-img/` 传上去。
 
@@ -92,7 +92,7 @@ cloudflared tunnel --url http://localhost:8080
 
 ## 上线后自检清单
 
-1. 打开域名 → 开始界面出现，页脚有 **「构建 v7」**
+1. 打开域名 → 开始界面出现，页脚有 **「构建 v8」**
 2. 人机对战 → 手牌**有卡图**（不是黑块）、能拖拽出牌、动画正常
 3. 两个浏览器窗口：一个「创建房间」拿 4 位码，另一个「加入房间」输入 → 能进对局
 4. 若第 3 步失败：检查平台是否把实例数设成了 1（多实例会导致两个玩家不在同一个进程里）
@@ -105,7 +105,7 @@ cloudflared tunnel --url http://localhost:8080
 |---|---|---|
 | `jsdom@30.x: The engine "node" is incompatible ... Got "18.x"` 然后 `Cannot find module 'ws'` | 平台 Node 18 装不了 jsdom@30，导致整次 `yarn install` 中断，`ws` 也没装上 | **已修复**：`jsdom` 已移出 `package.json`，改为只有 `ws` |
 | `Cannot find module 'ws'` | 旧版本遗留（v7 起服务端已改为零依赖 `server/wsmini.js`，不会再出现） | 重新部署拿最新代码即可 |
-| 页面能开但「创建房间」提示无法连接服务器 | 平台代理没转发 WebSocket，或服务端还是旧版本 | v7 起服务端零依赖；确认部署的是最新提交（页脚「构建 v7」） |
+| 页面能开但「创建房间」提示无法连接服务器 | 平台代理没转发 WebSocket，或服务端还是旧版本 | v7 起服务端零依赖；确认部署的是最新提交（页脚「构建 v8」） |
 | `EADDRINUSE` / 端口占用 | 起了多个进程 | 重启实例 |
 | `Cannot find module '../data/cards.json'` | 启动目录不是仓库根 | 启动命令用 `npm start` |
 | 页面能开但房间连不上 | 实例数 > 1，两个玩家落在不同进程 | 把副本数/自动扩缩容关掉，保持 1 个实例 |
