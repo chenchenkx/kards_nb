@@ -1,0 +1,164 @@
+### BAKER STREET IRREGULARS [order]
+Develop a British special force unit. If you control a Commando, also Develop a British order.
+### BLETCHLEY PARK [order]
+All enemy cards with cost 5 or less in hand and on the battlefield are put on top of enemy's deck.
+### BPF [order]
+Develop BLAST, PLAN or PRODUCTION, then Develop a British Navy card.
+### HAMPSHIRE REGIMENT [infantry]
+Deployment: Develop CONVOY HX 175, THE DESERT RATS or FORTIFICATION.
+### INFILTRATE [order]
+Each friendly Commando deals damage to a random enemy equal to known enemy cards.
+### INGENUITY [order]
+Develop a British or US bomber.
+### QUEEN'S OWN [infantry]
+Deployment: Put target unit on top of its owner's deck.
+### RAID [order]
+Cards in enemy hand cost 2 more next turn.
+### SUPPLY SHORTAGE [order]
+Enemy units get: "Receives 1 damage at the start of owner's turn."
+### 15. AUFKLÄRUNG [infantry]
+Deployment: Develop a German countermeasure.
+### 20. PANZERGRENADIER [infantry]
+Deployment: Add a PANZER 35(t) and a COMBINED ARMS to your hand.
+### 4. PIONEER BATTALION [infantry]
+Deployment: Give all friendly ground units in the frontline +1 defense.
+### 92. INFANTRY REGIMENT [infantry]
+Deployment: Develop BLITZKRIEG, SKY BARONS or TACTICAL STRIKE.
+### ATLANTIC COMMAND [order]
+Move two random Navy cards in your deck to the top.
+### BYPASS [order]
+Deal damage to target HQ equal to the total cost of your German tanks in the frontline.
+### CAPITULATION [order]
+All enemy units are Converted into ROUTED TROOPS.
+### FRONT AND HOMELAND [order]
+Draw from your deck on turn 4. ⏎ Reduce the cost of German cards with odd cost in your deck by 1.
+### GATHERING STORM [order]
+Draw a random infantry, tank, artillery and fighter from your deck.
+### HAPPY TIME [order]
+Choose 1 of 3 cards in the enemy hand. Copy it, then Convert both into PLAN.
+### JET PROTOTYPE [fighter]
+Deployment: Remove 6 cards from your deck. -1 operation cost for each with even cost.
+### KRIEGSMARINE [order]
+Deal damage to enemy HQ equal to cards in enemy hand, then enemy discards a card.
+### KURMARK AUFKLÄRUNG [infantry]
+Deployment: Choose a countermeasure in hand. Activate it at the end of your turn.
+### PANZER 35(t) [tank]
+Deployment: Reduce operation cost by 1 if you control an infantry.
+### ROUT [order]
+Convert target unit with cost 2 or less into ROUTED TROOPS.
+### AIR ESCORT [order]
+Trigger non-targeting deployment effects on friendly units on the battlefield.
+### BETASOM [order]
+Develop a Navy card. The top card of your deck has the Navy type until the end of your next turn.
+### FIAT G.55 [fighter]
+Deployment: +2+2 if your HQ has 5 or more defense than the enemy HQ.
+### SAVOIA-MARCHETTI SM.79 [bomber]
+Deployment: Trigger a non-targeted deployment effect on a friendly unit.
+### VANGUARD [order]
+A friendly Alpine unit gets Blitz and "Damage dealt by this unit adds equal defense to your HQ."
+### 151st INFANTRY REGIMENT [infantry]
+Deployment: Develop AMPHIBIOUS ASSAULT, EXPANSION or FOR PROSPERITY.
+### 73rd INFANTRY REGIMENT [infantry]
+Deployment: Trigger the destruction effects of all friendly units destroyed since the start of your last turn.
+### DUTY IS A MOUNTAIN [order]
+Give your units: "Destruction effects on this unit trigger an extra time."
+### IJN SHINANO [order]
+Distribute damage randomly to enemies equal to the number of units on the battlefield.
+### IMPERIAL DECREE [order]
+The next damage order you give this turn deals +1 damage.
+### INFILTRATION [order]
+Give target Japanese unit in the frontline +3+3.
+### Ki-44 TOJO [fighter]
+Deployment: The enemy discards a random bomber from hand.
+### Ki-46 DINAH III [fighter]
+Deployment: Draw two random 1-cost units from your deck.
+### SENDAI REGIMENT [infantry]
+Deployment: Remove an enemy unit until SENDAI REGIMENT leaves the battlefield.
+### SNEAK MANEUVER [order]
+Give target infantry or tank with 0 operation cost +2 attack.
+### SNEAK MANEUVER [order]
+Give target infantry or tank with 0 operation cost +2 attack.
+### TAKE LIBERTY [order]
+Each player shuffles their hand into their deck, then draws 4 cards.
+### DELUGE [order]
+Distribute 6 defense between random friendly targets.
+### SCORCHING SUN [order]
+Your air units get attack equal to their operation cost, then set it to 0 for all your units.
+### 2nd INFANTRY REGIMENT [infantry]
+Deployment: Get the combat keywords of a target unit.
+### ORP BŁYSKAWICA [order]
+Copy a random order in the enemy deck. Gain HQ defense equal to its cost.
+### ORP GENERAL HALLER [order]
+Convert target unit and adjacent units into ROUTED TROOPS.
+### 740th RIFLE REGIMENT [infantry]
+Deployment: Develop ARCTIC CONVOY, BURNING SKY or THE HAMMER.
+### 99th KHOLM [infantry]
+Deployment: Lose 1 kredit at the start of your next turn.
+### AID TO THE FRONT [order]
+Give a unit with two or more combat keywords +2+2.
+### DEPTHS OF WINTER [order]
+Remove all units from the battlefield. Replace them with LIGHT INFANTRY units.
+### FORWARD PRESS [order]
+Deal damage to target unit equal to number of friendly units.
+### ILYUSHIN IL-2 [bomber]
+Deployment: Choose a unit in hand with a cost of 3 or less. Put it into play.
+### IRREGULAR RECRUITS [order]
+Add a random combination of two LIGHT INFANTRY and/or BLAST to your hand.
+### PATRIOTIC FIRESTORM [order]
+Your support line units have + 2 attack until end of turn.
+### PERSIAN CORRIDOR [order]
+Give a friendly British or US unit: "Destruction: Trigger all Destruction effects of your Soviet units."
+### SCORCHED EARTH [order]
+Set the operation cost of all units on the battlefield to 4.
+### STALIN'S ORGAN [order]
+Randomly distribute 8 damage between enemies.
+### TOE TO TOE [order]
+Deal damage to target unit equal to highest attack among friendly units.
+### TURNING POINT [order]
+Your T-34s operate for free this turn and their excess attack damage is dealt to the enemy HQ.
+### VICTORY BANNERS [order]
+Target a unit. Convert all units on the battlefield belonging to the owner into the targeted unit.
+### 12th INFANTRY REGIMENT [infantry]
+Deployment: Spend your remaining kredits. This unit gets +X+X where X is kredits spent.
+### 175th INFANTRY REGIMENT [infantry]
+Deployment: Choose a card in hand. Put it on top of your deck.
+### 32nd INFANTRY REGIMENT [infantry]
+Deployment: Draw a 32nd INFANTRY REGIMENT from your deck.
+### 41st INFANTRY REGIMENT [infantry]
+Deployment: Develop DEATH FROM ABOVE, UNITY IS STRENGTH or WE CAN DO IT!
+### A-20 HAVOC [bomber]
+Deployment: Your bombers operate for 2 less this turn.
+### A-24 BANSHEE [bomber]
+Deployment: Deal damage to target enemy unit equal to your unspent kredits.
+### BOLSTER THE RANKS [order]
+Give target unit plus attack and defense equal to its operation cost, then set it to 0.
+### FORTUNES OF WAR [order]
+Trigger the Destruction effects on a target unit as if it was yours, then remove the effect if an enemy unit.
+### GRIM DAY [order]
+Until your next turn, it costs +2 kredits for the enemy to target or attack your units.
+### HELL ON WHEELS [order]
+Duplicate a friendly tank and reduce its operation cost by 2. Double its attack if a Sherman.
+### IN HOUR OF NEED [order]
+Gain two extra kredit slots.
+### MARINE PATROLS [order]
+Enemy units cost 1 more to operate this battle.
+### MAYHEM [order]
+Choose a unit in hand. Swap it with a friendly unit on the battlefield.
+### NAVAL BLOCKADE [order]
+Enemy discards all units from hand.
+### OUTRAGE [order]
+Develop a RETRIBUTION.
+### OVERWHELMING FORCE [order]
+Choose and discard a unit. Give its attack and defense to target friendly infantry or tank.
+### PATRIOTIC ZEAL [order]
+Double the attack and defense of a friendly unit.
+### RETRIBUTION [order]
+Distribute the attack of a friendly unit as damage between all enemies.
+### RETRIBUTION [order]
+Develop two RETRIBUTIONS.
+### THE AMERICAN GUARD [infantry]
+Deployment: Choose a card in hand. Convert the top card of your deck into it.
+### WOMEN AT WORK [order]
+Choose a US unit in hand. Reduce its cost by its operation cost.
+### YANK [order]
+Your HQ gets: "This battle, the first time you Develop each turn, also Develop a RETRIBUTION."

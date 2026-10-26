@@ -151,6 +151,14 @@ function sendView(room) {
 
 function startGame(room) {
   const seed = Math.floor(Math.random() * 2147483647);
+  // 卡组合法性（主国/副国/稀有度）——仅记录，开局仍按实际张数进行
+  for (const p of room.players) {
+    if (!p || !p.deck) continue;
+    try {
+      const v = Engine.validateDeck(p.deck, p.nation, p.ally, db);
+      if (!v.ok) console.log(`[房间 ${room.code}] 座位 ${p.seat} 卡组非法:`, v.errors.slice(0, 3).join('; '));
+    } catch (e) { /* ignore */ }
+  }
   room.game = new Engine.Game({
     db, seed,
     decks: [room.players[0].deck, room.players[1].deck],
@@ -203,7 +211,7 @@ function handleAction(room, player, msg) {
 const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
-  const conn = { ws, room: null, seat: -1, deck: null, hq: null, nation: null };
+  const conn = { ws, room: null, seat: -1, deck: null, hq: null, nation: null, ally: null };
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch (e) { return; }
@@ -219,6 +227,7 @@ wss.on('connection', (ws) => {
           conn.deck = msg.deck || null;
           conn.hq = msg.hq || null;
           conn.nation = msg.nation || null;
+          conn.ally = msg.ally || null;
           ws.send(JSON.stringify({ t: 'room', code, seat: 0 }));
           break;
         }
@@ -234,6 +243,7 @@ wss.on('connection', (ws) => {
           conn.deck = msg.deck || null;
           conn.hq = msg.hq || null;
           conn.nation = msg.nation || null;
+          conn.ally = msg.ally || null;
           ws.send(JSON.stringify({ t: 'room', code, seat: 1 }));
           broadcast(room, { t: 'opponentJoined', nation: conn.nation }, conn);
           // auto-start when both ready

@@ -37,7 +37,7 @@ console.log('=== setup tests ===');
 // find test cards
 const BLITZ_INF = db.cards.find(c => c.type === 'infantry' && c.keywords.includes('blitz') && c.cost <= 3 && c.attack >= 3);
 const TANK = db.cards.find(c => c.type === 'tank' && c.cost <= 3 && c.attack >= 3);
-const INF = db.cards.find(c => c.type === 'infantry' && !c.keywords.includes('blitz') && c.cost <= 2 && c.attack >= 2);
+const INF = db.cards.find(c => c.type === 'infantry' && !c.keywords.includes('blitz') && !c.keywords.includes('deployment') && c.cost <= 2 && c.attack >= 2 && !/draw/i.test(c.text || ''));
 const ARTY = db.cards.find(c => c.type === 'artillery' && c.cost <= 4 && c.attack >= 2);
 const BOMBER = db.cards.find(c => c.type === 'bomber' && c.cost <= 5 && c.attack >= 2);
 const FIGHTER = db.cards.find(c => c.type === 'fighter' && c.cost <= 4 && c.attack >= 2);
@@ -230,6 +230,46 @@ console.log('=== victory ===');
   const g = mkGame([INF.id], [INF.id]);
   g.damageHq(1, 25, null);
   check('HQ at 0 ends game with winner', g.done && g.winner === 0 && g.players[1].hqDef === 0);
+}
+
+// ---------------------------------------------------------------------------
+// 效果文本解析器：不得出现灾难性回溯导致的无限循环。
+//
+// 曾经的 bug：parseOps 里 "Give ... <keyword>" 分支用了嵌套量词
+// `((?:[a-z]+ ?)+)$`（量词套量词），在长小写词尾上会指数级回溯。
+// 单条正则就能把 CPU 打满、整局对局永久卡死。
+// 四张卡必中：THE DOUBLE SUNRISE / SORTIE / BOLSTER THE RANKS / OVERWHELMING FORCE。
+//
+// 这里用「子进程 + 超时」做硬保证：一旦有人把正则改回危险写法，
+// 测试会超时失败而不是把 CI 一起挂死。
+// ---------------------------------------------------------------------------
+console.log('=== effect parser: no catastrophic backtracking ===');
+{
+  const { spawnSync } = require('child_process');
+  const os = require('os');
+  const fsx = require('fs');
+  const probe = path.join(os.tmpdir(), 'kards_effect_parse_probe.js');
+  const effectCards = cards.filter(c => c.type === 'order' || (c.keywords || []).includes('deployment'));
+  fsx.writeFileSync(probe, `
+    const Engine = require(${JSON.stringify(path.join(__dirname, '..', 'public', 'js', 'engine.js'))});
+    const cards = require(${JSON.stringify(path.join(__dirname, '..', 'data', 'cards.json'))});
+    const list = cards.filter(c => c.type === 'order' || (c.keywords || []).includes('deployment'));
+    for (const c of list) Engine.parseClauses(c.text || '');
+    console.log('OK');
+  `);
+  const r = spawnSync(process.execPath, [probe], { timeout: 30000, encoding: 'utf8' });
+  fsx.unlinkSync(probe);
+  check(`all ${effectCards.length} effect cards parse without hanging`,
+    r.status === 0 && /OK/.test(r.stdout || ''));
+
+  // 单独点名那四张历史事故卡，失败时能直接看出是哪张
+  const known = ['THE DOUBLE SUNRISE', 'SORTIE', 'BOLSTER THE RANKS', 'OVERWHELMING FORCE'];
+  for (const nm of known) {
+    const c = cards.find(x => x.name === nm);
+    let parsed = null;
+    try { parsed = Engine.parseClauses(c ? c.text : ''); } catch (e) { parsed = e; }
+    check(`"${nm}" parses without hanging`, Array.isArray(parsed));
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,0 +1,627 @@
+[
+ {
+  "id": "card_event_the_double_sunrise",
+  "name": "THE DOUBLE SUNRISE",
+  "text": "Give a random friendly unit on the battlefield and in hand +2+1."
+ },
+ {
+  "id": "card_event_baker_street_irregulars",
+  "name": "BAKER STREET IRREGULARS",
+  "text": "Develop a British special force unit. If you control a Commando, also Develop a British order."
+ },
+ {
+  "id": "card_event_bletchley_park",
+  "name": "BLETCHLEY PARK",
+  "text": "All enemy cards with cost 5 or less in hand and on the battlefield are put on top of enemy's deck."
+ },
+ {
+  "id": "card_event_bpf",
+  "name": "BPF",
+  "text": "Develop BLAST, PLAN or PRODUCTION, then Develop a British Navy card."
+ },
+ {
+  "id": "card_event_breakout",
+  "name": "BREAKOUT",
+  "text": "Give a Veteran unit Fury and Shock."
+ },
+ {
+  "id": "card_event_dilemma",
+  "name": "DILEMMA",
+  "text": "Swap the attack and operation cost of target unit."
+ },
+ {
+  "id": "card_unit_hampshire_regiment",
+  "name": "HAMPSHIRE REGIMENT",
+  "text": "Deployment: Develop CONVOY HX 175, THE DESERT RATS or FORTIFICATION."
+ },
+ {
+  "id": "card_event_infiltrate",
+  "name": "INFILTRATE",
+  "text": "Each friendly Commando deals damage to a random enemy equal to known enemy cards."
+ },
+ {
+  "id": "card_event_ingenuity",
+  "name": "INGENUITY",
+  "text": "Develop a British or US bomber."
+ },
+ {
+  "id": "card_event_kangaroo_transport",
+  "name": "KANGAROO TRANSPORT",
+  "text": "Give a British infantry Blitz and +1 Heavy Armor."
+ },
+ {
+  "id": "card_event_naval_support",
+  "name": "NAVAL SUPPORT",
+  "text": "Change the attack on target unit to be equal to its defense."
+ },
+ {
+  "id": "card_event_overrun",
+  "name": "OVERRUN",
+  "text": "Attacking ground units deal damage equal to their defense this turn."
+ },
+ {
+  "id": "card_unit_qf_40mm_mk_iii",
+  "name": "QF 40mm Mk III",
+  "text": "Deployment: Duplicate this unit if you have damaged the enemy HQ this turn."
+ },
+ {
+  "id": "card_unit_queens_own",
+  "name": "QUEEN'S OWN",
+  "text": "Deployment: Put target unit on top of its owner's deck."
+ },
+ {
+  "id": "card_event_raid",
+  "name": "RAID",
+  "text": "Cards in enemy hand cost 2 more next turn."
+ },
+ {
+  "id": "card_event_campaign_tunis3_supply_intercepted",
+  "name": "SUPPLY INTERCEPTED",
+  "text": "Enemy does not draw for 3 turns."
+ },
+ {
+  "id": "card_event_supply_shortage",
+  "name": "SUPPLY SHORTAGE",
+  "text": "Enemy units get: \"Receives 1 damage at the start of owner's turn.\""
+ },
+ {
+  "id": "card_unit_valentine_mk_ii",
+  "name": "VALENTINE Mk II",
+  "text": "Deployment: Gets Blitz if you deployed a British infantry last turn."
+ },
+ {
+  "id": "card_unit_french_p_36",
+  "name": "H75-C1",
+  "text": "Deployment: Give a friendly unit Mobilize."
+ },
+ {
+  "id": "card_unit_104_panzergrenadier",
+  "name": "104. PANZERGRENADIER",
+  "text": "Deployment: Reduce the operation cost by 1 if you control a tank."
+ },
+ {
+  "id": "card_unit_15_aufklarungs",
+  "name": "15. AUFKLÄRUNG",
+  "text": "Deployment: Develop a German countermeasure."
+ },
+ {
+  "id": "card_unit_20_panzergrenadier",
+  "name": "20. PANZERGRENADIER",
+  "text": "Deployment: Add a PANZER 35(t) and a COMBINED ARMS to your hand."
+ },
+ {
+  "id": "card_unit_4_pioneer",
+  "name": "4. PIONEER BATTALION",
+  "text": "Deployment: Give all friendly ground units in the frontline +1 defense."
+ },
+ {
+  "id": "card_unit_62_infantry_regiment",
+  "name": "62. INFANTRY REGIMENT",
+  "text": "Deployment: Reduce the operation cost on a friendly unit by 1."
+ },
+ {
+  "id": "card_unit_92_infantry_regiment",
+  "name": "92. INFANTRY REGIMENT",
+  "text": "Deployment: Develop BLITZKRIEG, SKY BARONS or TACTICAL STRIKE."
+ },
+ {
+  "id": "card_unit_arado_ar_196",
+  "name": "ARADO AR 196",
+  "text": "Deployment: If you have equal or less units on the battlefield, draw an order."
+ },
+ {
+  "id": "card_event_fliegerfuhrer_atlantik",
+  "name": "ATLANTIC COMMAND",
+  "text": "Move two random Navy cards in your deck to the top."
+ },
+ {
+  "id": "card_event_bypass",
+  "name": "BYPASS",
+  "text": "Deal damage to target HQ equal to the total cost of your German tanks in the frontline."
+ },
+ {
+  "id": "card_event_capitulation",
+  "name": "CAPITULATION",
+  "text": "All enemy units are Converted into ROUTED TROOPS."
+ },
+ {
+  "id": "card_event_front_and_homeland",
+  "name": "FRONT AND HOMELAND",
+  "text": "Draw from your deck on turn 4.\r\nReduce the cost of German cards with odd cost in your deck by 1."
+ },
+ {
+  "id": "card_unit_fw_190_f",
+  "name": "FW 190 JAGDBOMBER",
+  "text": "Deployment: Send an enemy ground unit to hand."
+ },
+ {
+  "id": "card_unit_fw_200_condor",
+  "name": "FW 200 CONDOR",
+  "text": "Deployment: Cannot attack the enemy HQ this turn."
+ },
+ {
+  "id": "card_event_gathering_storm",
+  "name": "GATHERING STORM",
+  "text": "Draw a random infantry, tank, artillery and fighter from your deck."
+ },
+ {
+  "id": "card_event_happy_time",
+  "name": "HAPPY TIME",
+  "text": "Choose 1 of 3 cards in the enemy hand. Copy it, then Convert both into PLAN."
+ },
+ {
+  "id": "card_unit_jet_protoype_a",
+  "name": "JET PROTOTYPE",
+  "text": "Deployment: Remove 6 cards from your deck. -1 operation cost for each with even cost."
+ },
+ {
+  "id": "card_event_kriegsmarine",
+  "name": "KRIEGSMARINE",
+  "text": "Deal damage to enemy HQ equal to cards in enemy hand, then enemy discards a card."
+ },
+ {
+  "id": "card_unit_kurmark_aufklarungs",
+  "name": "KURMARK AUFKLÄRUNG",
+  "text": "Deployment: Choose a countermeasure in hand. Activate it at the end of your turn."
+ },
+ {
+  "id": "card_unit_railway_gun_leopold",
+  "name": "LEOPOLD",
+  "text": "Deployment: Send all enemy units to hand."
+ },
+ {
+  "id": "card_unit_me_bf_110_brothers",
+  "name": "ME BF 110 E",
+  "text": "Deployment: Gets Blitz if you control the frontline."
+ },
+ {
+  "id": "card_unit_panzer_35_t",
+  "name": "PANZER 35(t)",
+  "text": "Deployment: Reduce operation cost by 1 if you control an infantry."
+ },
+ {
+  "id": "card_event_rapid_engagement",
+  "name": "RAPID ENGAGEMENT",
+  "text": "Remove a friendly unit from the battlefield, then return it and give it Blitz."
+ },
+ {
+  "id": "card_event_root_out_the_enemy",
+  "name": "ROOT OUT THE ENEMY",
+  "text": "All units get -1-2."
+ },
+ {
+  "id": "card_event_rout",
+  "name": "ROUT",
+  "text": "Convert target unit with cost 2 or less into ROUTED TROOPS."
+ },
+ {
+  "id": "card_event_air_escort",
+  "name": "AIR ESCORT",
+  "text": "Trigger non-targeting deployment effects on friendly units on the battlefield."
+ },
+ {
+  "id": "card_event_betasom",
+  "name": "BETASOM",
+  "text": "Develop a Navy card. The top card of your deck has the Navy type until the end of your next turn."
+ },
+ {
+  "id": "card_event_colonial_dreams",
+  "name": "COLONIAL DREAMS",
+  "text": "The player with the most units in hand draws 2 cards."
+ },
+ {
+  "id": "card_event_convoy_attack",
+  "name": "CONVOY ATTACK",
+  "text": "Deal 0-2 damage to any target."
+ },
+ {
+  "id": "card_unit_fiat_g55",
+  "name": "FIAT G.55",
+  "text": "Deployment: +2+2 if your HQ has 5 or more defense than the enemy HQ."
+ },
+ {
+  "id": "card_unit_m13_40",
+  "name": "M13/40",
+  "text": "Deployment: Gains Blitz if you control an infantry."
+ },
+ {
+  "id": "card_unit_sm_79",
+  "name": "SAVOIA-MARCHETTI SM.79",
+  "text": "Deployment: Trigger a non-targeted deployment effect on a friendly unit."
+ },
+ {
+  "id": "card_event_vanguard_ita",
+  "name": "VANGUARD",
+  "text": "A friendly Alpine unit gets Blitz and \"Damage dealt by this unit adds equal defense to your HQ.\""
+ },
+ {
+  "id": "card_unit_151st_infantry_regiment",
+  "name": "151st INFANTRY REGIMENT",
+  "text": "Deployment: Develop AMPHIBIOUS ASSAULT, EXPANSION or FOR PROSPERITY."
+ },
+ {
+  "id": "card_unit_73rd_infantry_regiment",
+  "name": "73rd INFANTRY REGIMENT",
+  "text": "Deployment: Trigger the destruction effects of all friendly units destroyed since the start of your last turn."
+ },
+ {
+  "id": "card_unit_a5m4_claude",
+  "name": "A5M4 CLAUDE",
+  "text": "Deployment: Give another friendly unit -1 operation cost."
+ },
+ {
+  "id": "card_event_japan_duty",
+  "name": "DUTY IS A MOUNTAIN",
+  "text": "Give your units: \"Destruction effects on this unit trigger an extra time.\""
+ },
+ {
+  "id": "card_event_elusive_force",
+  "name": "ELUSIVE FORCE",
+  "text": "The enemy cannot give orders next turn."
+ },
+ {
+  "id": "card_event_shinano",
+  "name": "IJN SHINANO",
+  "text": "Distribute damage randomly to enemies equal to the number of units on the battlefield."
+ },
+ {
+  "id": "card_event_imperial_decree",
+  "name": "IMPERIAL DECREE",
+  "text": "The next damage order you give this turn deals +1 damage."
+ },
+ {
+  "id": "card_event_campaign_philippines4_infiltration",
+  "name": "INFILTRATION",
+  "text": "Give target Japanese unit in the frontline +3+3."
+ },
+ {
+  "id": "card_unit_kyoto_regiment",
+  "name": "KYOTO REGIMENT",
+  "text": "Deployment: Remove an enemy unit until this unit leaves the battlefield."
+ },
+ {
+  "id": "card_unit_ki_44_tojo",
+  "name": "Ki-44 TOJO",
+  "text": "Deployment: The enemy discards a random bomber from hand."
+ },
+ {
+  "id": "card_unit_dinah_iii",
+  "name": "Ki-46 DINAH III",
+  "text": "Deployment: Draw two random 1-cost units from your deck."
+ },
+ {
+  "id": "card_unit_japan_ki_67_peggy",
+  "name": "Ki-67 PEGGY",
+  "text": "Deployment: Remove an enemy unit that has 3 or less attack."
+ },
+ {
+  "id": "card_event_new_doctrine",
+  "name": "NEW DOCTRINE",
+  "text": "Ignore \"Cannot attack the enemy HQ\" on target unit."
+ },
+ {
+  "id": "card_unit_sendai_regiment",
+  "name": "SENDAI REGIMENT",
+  "text": "Deployment: Remove an enemy unit until SENDAI REGIMENT leaves the battlefield."
+ },
+ {
+  "id": "card_event_sneak_maneuver",
+  "name": "SNEAK MANEUVER",
+  "text": "Give target infantry or tank with 0 operation cost +2 attack."
+ },
+ {
+  "id": "card_event_sneak_maneuver_cam1",
+  "name": "SNEAK MANEUVER",
+  "text": "Give target infantry or tank with 0 operation cost +2 attack."
+ },
+ {
+  "id": "card_event_take_liberty",
+  "name": "TAKE LIBERTY",
+  "text": "Each player shuffles their hand into their deck, then draws 4 cards."
+ },
+ {
+  "id": "card_event_rain2_deluge",
+  "name": "DELUGE",
+  "text": "Distribute 6 defense between random friendly targets."
+ },
+ {
+  "id": "card_event_rain4_monsoon_rain",
+  "name": "MONSOON RAIN",
+  "text": "Each player removes their 2 most expensive cards in hand and/or on the battlefield."
+ },
+ {
+  "id": "card_event_sunny4_scorching_sun3",
+  "name": "SCORCHING SUN",
+  "text": "Your air units get attack equal to their operation cost, then set it to 0 for all your units."
+ },
+ {
+  "id": "card_unit_2nd_infantry_regiment",
+  "name": "2nd INFANTRY REGIMENT",
+  "text": "Deployment: Get the combat keywords of a target unit."
+ },
+ {
+  "id": "card_unit_6th_infantry_brigade",
+  "name": "6th INFANTRY BRIGADE",
+  "text": "Deployment: Has 0 operation cost this turn."
+ },
+ {
+  "id": "card_event_orp_blyskawica",
+  "name": "ORP BŁYSKAWICA",
+  "text": "Copy a random order in the enemy deck. Gain HQ defense equal to its cost."
+ },
+ {
+  "id": "card_event_orp_general_haller",
+  "name": "ORP GENERAL HALLER",
+  "text": "Convert target unit and adjacent units into ROUTED TROOPS."
+ },
+ {
+  "id": "card_unit_740th_rifle_regiment",
+  "name": "740th RIFLE REGIMENT",
+  "text": "Deployment: Develop ARCTIC CONVOY, BURNING SKY or THE HAMMER."
+ },
+ {
+  "id": "card_unit_99th_kholm",
+  "name": "99th KHOLM",
+  "text": "Deployment: Lose 1 kredit at the start of your next turn."
+ },
+ {
+  "id": "card_event_aid_to_the_front",
+  "name": "AID TO THE FRONT",
+  "text": "Give a unit with two or more combat keywords +2+2."
+ },
+ {
+  "id": "card_event_depths_of_winter",
+  "name": "DEPTHS OF WINTER",
+  "text": "Remove all units from the battlefield. Replace them with LIGHT INFANTRY units."
+ },
+ {
+  "id": "card_event_campaign_moscow3_forward_press",
+  "name": "FORWARD PRESS",
+  "text": "Deal damage to target unit equal to number of friendly units."
+ },
+ {
+  "id": "card_unit_ilyushin_il_2",
+  "name": "ILYUSHIN IL-2",
+  "text": "Deployment: Choose a unit in hand with a cost of 3 or less. Put it into play."
+ },
+ {
+  "id": "card_event_irregular_recruits",
+  "name": "IRREGULAR RECRUITS",
+  "text": "Add a random combination of two LIGHT INFANTRY and/or BLAST to your hand."
+ },
+ {
+  "id": "card_event_mud",
+  "name": "MUD",
+  "text": "Enemy ground units cannot attack next turn."
+ },
+ {
+  "id": "card_event_patriotic_firestorm",
+  "name": "PATRIOTIC FIRESTORM",
+  "text": "Your support line units have + 2 attack until end of turn."
+ },
+ {
+  "id": "card_event_persian_corridor",
+  "name": "PERSIAN CORRIDOR",
+  "text": "Give a friendly British or US unit: \"Destruction: Trigger all Destruction effects of your Soviet units.\""
+ },
+ {
+  "id": "card_event_scorched_earth",
+  "name": "SCORCHED EARTH",
+  "text": "Set the operation cost of all units on the battlefield to 4."
+ },
+ {
+  "id": "card_event_snowstorm",
+  "name": "SNOWSTORM",
+  "text": "All units have an operation cost of 4 until the start of your next turn."
+ },
+ {
+  "id": "card_event_stalin_organ",
+  "name": "STALIN'S ORGAN",
+  "text": "Randomly distribute 8 damage between enemies."
+ },
+ {
+  "id": "card_event_the_peoples_army",
+  "name": "THE PEOPLE'S ARMY",
+  "text": "Fill your hand and support line with LIGHT INFANTRY. Give them all Blitz."
+ },
+ {
+  "id": "card_event_campaign_moscow3_toe_to_toe",
+  "name": "TOE TO TOE",
+  "text": "Deal damage to target unit equal to highest attack among friendly units."
+ },
+ {
+  "id": "card_event_turning_point",
+  "name": "TURNING POINT",
+  "text": "Your T-34s operate for free this turn and their excess attack damage is dealt to the enemy HQ."
+ },
+ {
+  "id": "card_event_victory_banners",
+  "name": "VICTORY BANNERS",
+  "text": "Target a unit. Convert all units on the battlefield belonging to the owner into the targeted unit."
+ },
+ {
+  "id": "card_unit_yak_3",
+  "name": "YAK 3",
+  "text": "Deployment: Gains +1 attack and Ambush if you control a non-Soviet unit."
+ },
+ {
+  "id": "card_unit_12th_infantry_regiment",
+  "name": "12th INFANTRY REGIMENT",
+  "text": "Deployment: Spend your remaining kredits. This unit gets +X+X where X is kredits spent."
+ },
+ {
+  "id": "card_unit_175th_infantry_regiment",
+  "name": "175th INFANTRY REGIMENT",
+  "text": "Deployment: Choose a card in hand. Put it on top of your deck."
+ },
+ {
+  "id": "card_unit_32nd_infantry_regiment",
+  "name": "32nd INFANTRY REGIMENT",
+  "text": "Deployment: Draw a 32nd INFANTRY REGIMENT from your deck."
+ },
+ {
+  "id": "card_unit_39th_infantry_regiment",
+  "name": "39th INFANTRY REGIMENT",
+  "text": "Deployment: Gets Blitz if the enemy controls the frontline."
+ },
+ {
+  "id": "card_unit_41st_infantry_regiment",
+  "name": "41st INFANTRY REGIMENT",
+  "text": "Deployment: Develop DEATH FROM ABOVE, UNITY IS STRENGTH or WE CAN DO IT!"
+ },
+ {
+  "id": "card_unit_75th_rangers",
+  "name": "75th RANGERS",
+  "text": "Deployment: Reduce the operation cost of target unit to 0."
+ },
+ {
+  "id": "card_unit_a20_havoc",
+  "name": "A-20 HAVOC",
+  "text": "Deployment: Your bombers operate for 2 less this turn."
+ },
+ {
+  "id": "card_unit_a_24_banshee",
+  "name": "A-24 BANSHEE",
+  "text": "Deployment: Deal damage to target enemy unit equal to your unspent kredits."
+ },
+ {
+  "id": "card_event_bolster_the_ranks",
+  "name": "BOLSTER THE RANKS",
+  "text": "Give target unit plus attack and defense equal to its operation cost, then set it to 0."
+ },
+ {
+  "id": "card_event_embargo",
+  "name": "EMBARGO",
+  "text": "The enemy gets 2 fewer kredits next turn."
+ },
+ {
+  "id": "card_event_firewall",
+  "name": "FIREWALL",
+  "text": "Give target unit: \"Cannot attack the enemy HQ.\""
+ },
+ {
+  "id": "card_event_fortunes_of_war",
+  "name": "FORTUNES OF WAR",
+  "text": "Trigger the Destruction effects on a target unit as if it was yours, then remove the effect if an enemy unit."
+ },
+ {
+  "id": "card_event_grim_day",
+  "name": "GRIM DAY",
+  "text": "Until your next turn, it costs +2 kredits for the enemy to target or attack your units."
+ },
+ {
+  "id": "card_event_hell_on_wheels",
+  "name": "HELL ON WHEELS",
+  "text": "Duplicate a friendly tank and reduce its operation cost by 2. Double its attack if a Sherman."
+ },
+ {
+  "id": "card_event_in_hour_of_need",
+  "name": "IN HOUR OF NEED",
+  "text": "Gain two extra kredit slots."
+ },
+ {
+  "id": "card_event_land_of_the_free",
+  "name": "LAND OF THE FREE",
+  "text": "Reduce the operation cost of target unit to 0."
+ },
+ {
+  "id": "card_event_campaign_guadalcanal4_marine_patrols",
+  "name": "MARINE PATROLS",
+  "text": "Enemy units cost 1 more to operate this battle."
+ },
+ {
+  "id": "card_event_mayhem",
+  "name": "MAYHEM",
+  "text": "Choose a unit in hand. Swap it with a friendly unit on the battlefield."
+ },
+ {
+  "id": "card_event_mobilization",
+  "name": "MOBILIZATION",
+  "text": "Draw 2 units from your deck. Discard them at the end of turn."
+ },
+ {
+  "id": "card_event_campaign_guadalcanal4_naval_blockade",
+  "name": "NAVAL BLOCKADE",
+  "text": "Enemy discards all units from hand."
+ },
+ {
+  "id": "card_event_retribution",
+  "name": "OUTRAGE",
+  "text": "Develop a RETRIBUTION."
+ },
+ {
+  "id": "card_event_overwhelming_force",
+  "name": "OVERWHELMING FORCE",
+  "text": "Choose and discard a unit. Give its attack and defense to target friendly infantry or tank."
+ },
+ {
+  "id": "card_event_patriotic_zeal",
+  "name": "PATRIOTIC ZEAL",
+  "text": "Double the attack and defense of a friendly unit."
+ },
+ {
+  "id": "card_event_retribution12",
+  "name": "RETRIBUTION",
+  "text": "Distribute the attack of a friendly unit as damage between all enemies."
+ },
+ {
+  "id": "card_event_retribution4",
+  "name": "RETRIBUTION",
+  "text": "Develop two RETRIBUTIONS."
+ },
+ {
+  "id": "card_event_semper_fi",
+  "name": "SEMPER FI",
+  "text": "Convert 4 of the top 8 cards of your deck into 22nd MARINES. Give them the Navy type."
+ },
+ {
+  "id": "card_event_strategic_planning",
+  "name": "STRATEGIC PLANNING",
+  "text": "Double the attack and defense of your units."
+ },
+ {
+  "id": "card_unit_the_american_guard",
+  "name": "THE AMERICAN GUARD",
+  "text": "Deployment: Choose a card in hand. Convert the top card of your deck into it."
+ },
+ {
+  "id": "card_event_uncle_sam",
+  "name": "UNCLE SAM",
+  "text": "Duplicate a random unit in your hand."
+ },
+ {
+  "id": "card_event_victory_march",
+  "name": "VICTORY MARCH",
+  "text": "Set the operation cost of your units to 0. Gain HQ defense equal to total cost reduced."
+ },
+ {
+  "id": "card_event_women_at_work",
+  "name": "WOMEN AT WORK",
+  "text": "Choose a US unit in hand. Reduce its cost by its operation cost."
+ },
+ {
+  "id": "card_event_yank_the_army_weekly",
+  "name": "YANK",
+  "text": "Your HQ gets: \"This battle, the first time you Develop each turn, also Develop a RETRIBUTION.\""
+ }
+]

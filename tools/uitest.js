@@ -48,8 +48,8 @@ setTimeout(async () => {
     await new Promise(r => setTimeout(r, 800));
     check('card DB loaded in browser', window.CARD_DB && window.CARD_DB.cards.length > 1600);
     check('engine exposed', !!window.KardsEngine);
-    check('nation grid rendered', doc.querySelectorAll('.nation-chip').length === 10);
-    check('card count label', /1638 cards/.test(doc.getElementById('card-count-label').textContent));
+    check('nation grid rendered (5 major nations)', doc.querySelectorAll('.nation-chip').length === 5);
+    check('card count label (1728 cards + 178 HQ = 1906)', /1728/.test(doc.getElementById('card-count-label').textContent));
     check('auto deck built', window.App && window.App.deck && window.App.deck.length === 39);
 
     // start AI game

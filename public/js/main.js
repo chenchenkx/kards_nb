@@ -8,8 +8,9 @@
   const App = {
     db: null,
     nation: 'Germany',
+    ally: null,          // 副国（France/Italy/Poland/Finland/Anzac）
     deck: null,          // array of card ids (39)
-    hqId: null,
+    hqId: null,          // 所选总部（data/hqs.json 里的官方 location id）
     mode: 'auto',        // auto | preset | custom
     preset: null,
     engine: null,        // local engine (AI mode)
@@ -30,7 +31,7 @@
     window.DECK_CODES = deckcodes.codes || {};
     App.db = Engine.buildDb(cards, hqs);
     window.CARD_DB = App.db;
-    document.getElementById('card-count-label').textContent = `${cards.length} cards`;
+    document.getElementById('card-count-label').textContent = `${cards.length + hqs.length} 张卡（${cards.length} 卡牌 + ${hqs.length} 总部）`;
     buildNationGrid();
     selectNation('Germany');
     wireStartScreen();
@@ -50,7 +51,9 @@
   }
 
   // ---------------- nation grid ----------------
-  const NATIONS = ['Germany', 'USA', 'Soviet', 'Japan', 'Britain', 'France', 'Italy', 'Poland', 'Finland', 'Anzac'];
+  // 官方五大主国（有 HQ/location 数据）；其余五个国家只能当副国
+  const NATIONS = Engine.MAJOR_NATIONS.slice();
+  const ALLY_NATIONS = Engine.ALLY_NATIONS.slice();
   const NATION_FLAGS = { Germany: '🇩🇪', USA: '🇺🇸', Soviet: '☭', Japan: '🇯🇵', Britain: '🇬🇧', France: '🇫🇷', Italy: '🇮🇹', Poland: '🇵🇱', Finland: '🇫🇮', Anzac: '🇦🇺' };
   const NATION_ZH = { Germany: '德国', USA: '美国', Soviet: '苏联', Japan: '日本', Britain: '英国', France: '法国', Italy: '意大利', Poland: '波兰', Finland: '芬兰', Anzac: '澳新军团', Neutral: '中立' };
 
@@ -68,15 +71,92 @@
     }
   }
 
+  /** 当前选择的总部对象（按 hqId 精确取，缺省回落国家默认 HQ） */
+  function hqObj(nation) {
+    const n = nation || App.nation;
+    const id = (n === App.nation) ? App.hqId : null;
+    if (id && App.db.hqById[id]) return App.db.hqById[id];
+    return App.db.hqs[n] || App.db.hqs.Neutral;
+  }
+
+  /** 总部下拉：列出该国家全部可选 HQ（含真实防御值） */
+  function renderHqSelect() {
+    const sel = document.getElementById('hq-select');
+    if (!sel) return;
+    const list = App.db.hqsOf(App.nation);
+    const keep = App.hqId;
+    sel.innerHTML = '';
+    for (const h of list) {
+      const opt = document.createElement('option');
+      opt.value = h.id;
+      opt.textContent = `${h.name} · ${h.defense} 防`;
+      if (h.id === keep) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    if (!list.some(h => h.id === keep)) {
+      App.hqId = list.length ? list[0].id : App.db.hqs[App.nation].id;
+      sel.value = App.hqId;
+    }
+    sel.onchange = () => {
+      App.hqId = sel.value;
+      markDeckLabel();
+    };
+  }
+
+  /** 副国下拉：不能与主国相同 */
+  function renderAllySelect() {
+    const sel = document.getElementById('ally-select');
+    if (!sel) return;
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '无副国';
+    sel.appendChild(none);
+    for (const n of ALLY_NATIONS) {
+      if (n === App.nation) continue;
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = `副国：${NATION_ZH[n] || n}`;
+      if (App.ally === n) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    if (App.ally && App.ally === App.nation) App.ally = null;
+    sel.value = App.ally || '';
+    sel.onchange = () => {
+      App.ally = sel.value || null;
+      // 换副国后重算自动卡组（已有自定义/预设卡组则保留，交给校验提示）
+      if (App.mode === 'auto') rebuildAutoDeck();
+      markDeckLabel();
+    };
+  }
+
+  function rebuildAutoDeck() {
+    App.deck = Engine.autoDeck(App.nation, App.db, Engine.makeRng((Math.random() * 1e9) | 0), { ally: App.ally });
+  }
+
+  function markDeckLabel() {
+    const hq = hqObj(App.nation);
+    const ally = App.ally ? ' + ' + (NATION_ZH[App.ally] || App.ally) : '';
+    const base = App.mode === 'auto' ? `自动${NATION_ZH[App.nation] || App.nation}`
+      : App.mode === 'preset' && App.preset ? App.preset.name
+      : `自定义${NATION_ZH[App.nation] || App.nation}`;
+    document.getElementById('deck-name-label').textContent = `${base}${ally} · ${hq.name}`;
+  }
+
   function selectNation(n) {
     App.nation = n;
+    if (App.ally === n) App.ally = null;
     document.querySelectorAll('.nation-chip').forEach(c => c.classList.toggle('selected', c.dataset.nation === n));
+    App.hqId = (App.db.hqsOf(n)[0] || App.db.hqs[n]).id;
+    renderHqSelect();
+    renderAllySelect();
     if (App.mode === 'auto') {
-      App.deck = Engine.autoDeck(n, App.db, Engine.makeRng((Math.random() * 1e9) | 0));
-      App.hqId = App.db.hqs[n].id;
-      document.getElementById('deck-name-label').textContent = `自动${NATION_ZH[n] || n}卡组`;
+      rebuildAutoDeck();
+      markDeckLabel();
     } else if (App.mode === 'preset' && App.preset) {
       applyPreset(App.preset);
+    } else {
+      markDeckLabel();
     }
   }
 
@@ -110,35 +190,42 @@
     } catch (e) { /* ignore */ }
   }
 
+  /**
+   * 应用社区卡组码。
+   * 以前缺牌时用随机卡补满 39 张，等于把官方卡组污染成一半随机牌；
+   * 现在只在数据层面还原，缺几张就如实提示几张（AI 对局时由引擎按实际张数开局）。
+   */
   function applyPreset(preset) {
     App.preset = preset;
     const parsed = Engine.parseDeckCode(preset.code, window.DECK_CODES || {}, App.db);
-    if (parsed && parsed.cards.length >= 25) {
-      let deck = parsed.cards.slice(0, 39);
-      // pad to 39 with random cards from the main nation if the code references
-      // cards missing from our database
-      if (deck.length < 39) {
-        const filler = Engine.autoDeck(parsed.main, App.db, Engine.makeRng(1234));
-        const maxCopies = { Common: 4, Uncommon: 3, Rare: 2, Unique: 1 };
-        const counts = {};
-        for (const id of deck) counts[id] = (counts[id] || 0) + 1;
-        for (const id of filler) {
-          if (deck.length >= 39) break;
-          const def = App.db.byId[id];
-          if (!def) continue;
-          const max = maxCopies[def.rarity] || 2;
-          if ((counts[id] || 0) >= max) continue;
-          deck.push(id);
-          counts[id] = (counts[id] || 0) + 1;
-        }
-      }
-      App.deck = deck;
-      App.hqId = App.db.hqs[parsed.main].id;
-      document.getElementById('deck-name-label').textContent = `${preset.name}（${NATION_ZH[parsed.main] || parsed.main}）`;
-    } else {
-      // fallback to auto
-      App.deck = Engine.autoDeck(App.nation, App.db, Engine.makeRng(42));
-      document.getElementById('deck-name-label').textContent = preset.name + '（数据缺失，已用自动卡组替代）';
+    if (!parsed || !parsed.cards.length) {
+      App.deck = Engine.autoDeck(App.nation, App.db, Engine.makeRng(42), { ally: App.ally });
+      markDeckLabel();
+      document.getElementById('deck-name-label').textContent = preset.name + '（卡组码无法解析，已用自动卡组替代）';
+      return;
+    }
+    App.nation = parsed.main;
+    App.ally = parsed.ally && parsed.ally !== parsed.main && Engine.ALLY_NATIONS.includes(parsed.ally)
+      ? parsed.ally : null;
+    document.querySelectorAll('.nation-chip').forEach(c => c.classList.toggle('selected', c.dataset.nation === App.nation));
+    App.hqId = (App.db.hqsOf(parsed.main)[0] || App.db.hqs[parsed.main]).id;
+    App.deck = parsed.cards.slice(0, 39);
+    App.mode = 'preset';
+    renderHqSelect();
+    renderAllySelect();
+
+    const missing = Math.max(0, 39 - App.deck.length);
+    const v = Engine.validateDeck(App.deck, App.nation, App.ally, App.db);
+    const allyTxt = App.ally ? ' + ' + (NATION_ZH[App.ally] || App.ally) : '';
+    let label = `${preset.name}（${NATION_ZH[App.nation] || App.nation}${allyTxt}）`;
+    if (missing > 0) label += ` · 本卡库缺 ${missing} 张`;
+    document.getElementById('deck-name-label').textContent = label;
+    if (missing > 0) {
+      UI.logLine && UI.logLine(`⚠ 卡组「${preset.name}」在本地卡库中缺 ${missing} 张（官方数据本身只有 ${App.deck.length} 张可还原），未用随机牌填充`);
+    }
+    App.presetWarning = missing > 0 ? `该卡组在本卡库中缺 ${missing} 张` : null;
+    if (!v.ok && v.errors.length) {
+      App.presetWarning = (App.presetWarning ? App.presetWarning + '；' : '') + v.errors[0];
     }
   }
 
@@ -147,9 +234,8 @@
     document.getElementById('btn-auto-deck').addEventListener('click', () => {
       App.mode = 'auto';
       markDeckBtn('btn-auto-deck');
-      App.deck = Engine.autoDeck(App.nation, App.db, Engine.makeRng((Math.random() * 1e9) | 0));
-      App.hqId = App.db.hqs[App.nation].id;
-      document.getElementById('deck-name-label').textContent = `自动${NATION_ZH[App.nation] || App.nation}卡组`;
+      rebuildAutoDeck();
+      markDeckLabel();
     });
     document.getElementById('btn-preset-deck').addEventListener('click', () => {
       openPresetModal();
@@ -282,63 +368,138 @@
   }
 
   // ---------------- deck builder (simple) ----------------
+  /**
+   * 卡组构筑器（对齐官方规则）：
+   * - 主国（五大主国）+ 副国（可选）+ 中立 组成卡池
+   * - 副国卡 ≤ 12 张，且副国不能带精英/特殊精英
+   * - 单卡张数按稀有度上限：标准 4 / 限定 3 / 特殊 2 / 精英 1
+   * - 反制指令（gotcha）可加入卡组
+   * - 总部从该国家官方 location 里选（含真实防御值）
+   */
   function openDeckBuilder() {
     const modal = document.getElementById('preset-modal');
     const list = document.getElementById('preset-list');
     document.querySelector('.modal-box .modal-title').textContent = '卡组构筑';
     list.innerHTML = '';
 
+    if (!App.deck || App.deck.length < 30) rebuildAutoDeck();
+    const deckArr = App.deck.slice();
     const counts = {};
-    const deckArr = App.mode === 'custom' && App.deck ? App.deck.slice() : Engine.autoDeck(App.nation, App.db, Engine.makeRng(7)).slice();
     for (const id of deckArr) counts[id] = (counts[id] || 0) + 1;
 
-    const info = document.createElement('div');
-    info.style.cssText = 'font-size:11px;color:var(--text-dim);margin-bottom:8px;text-align:center';
-    list.appendChild(info);
+    const RARITY_ZH = { Common: '标准', Uncommon: '限定', Rare: '特殊', Unique: '精英' };
 
-    const poolWrap = document.createElement('div');
-    poolWrap.style.cssText = 'max-height:46vh;overflow:auto;display:flex;flex-direction:column;gap:4px';
-    list.appendChild(poolWrap);
+    // ---- 顶部配置行：副国 + 总部 ----
+    const cfg = document.createElement('div');
+    cfg.className = 'deck-row';
+    cfg.style.marginBottom = '6px';
+    const allySel = document.createElement('select');
+    allySel.className = 'code-input';
+    allySel.style.cssText = 'flex:1;font-size:12px;padding:6px 8px;letter-spacing:0;text-align:left';
+    const noneOpt = document.createElement('option');
+    noneOpt.value = '';
+    noneOpt.textContent = '无副国';
+    allySel.appendChild(noneOpt);
+    for (const n of ALLY_NATIONS) {
+      if (n === App.nation) continue;
+      const o = document.createElement('option');
+      o.value = n;
+      o.textContent = `副国：${NATION_ZH[n] || n}`;
+      if (App.ally === n) o.selected = true;
+      allySel.appendChild(o);
+    }
+    const hqSel = document.createElement('select');
+    hqSel.className = 'code-input';
+    hqSel.style.cssText = 'flex:1;font-size:12px;padding:6px 8px;letter-spacing:0;text-align:left';
+    for (const h of App.db.hqsOf(App.nation)) {
+      const o = document.createElement('option');
+      o.value = h.id;
+      o.textContent = `${h.name} · ${h.defense} 防`;
+      if (h.id === App.hqId) o.selected = true;
+      hqSel.appendChild(o);
+    }
+    cfg.appendChild(allySel);
+    cfg.appendChild(hqSel);
+    list.appendChild(cfg);
+
+    const info = document.createElement('div');
+    info.style.cssText = 'font-size:11px;color:var(--text-dim);margin-bottom:6px;text-align:center';
+    list.appendChild(info);
 
     const search = document.createElement('input');
     search.className = 'code-input';
     search.style.cssText = 'font-size:14px;letter-spacing:0.05em;text-align:left;padding:8px 10px;margin-bottom:8px';
     search.placeholder = '搜索卡牌…';
-    list.insertBefore(search, poolWrap);
+    list.appendChild(search);
+
+    const poolWrap = document.createElement('div');
+    poolWrap.style.cssText = 'max-height:40vh;overflow:auto;display:flex;flex-direction:column;gap:4px';
+    list.appendChild(poolWrap);
+
+    function allyCount() {
+      let n = 0;
+      for (const id of deckArr) {
+        const d = App.db.byId[id];
+        if (App.ally && d && d.nation === App.ally) n++;
+      }
+      return n;
+    }
 
     function refreshInfo() {
-      const total = deckArr.length;
-      const unique = Object.keys(counts).length;
-      info.textContent = `${total}/39 张 · ${unique} 种不同卡牌 · 国家：${NATION_ZH[App.nation] || App.nation}`;
+      const ally = allyCount();
+      const unique = Object.keys(counts).filter(k => counts[k] > 0).length;
+      info.textContent = `${deckArr.length}/39 张 · ${unique} 种 · 主国：${NATION_ZH[App.nation] || App.nation}`
+        + (App.ally ? ` · 副国：${NATION_ZH[App.ally] || App.ally} ${ally}/${Engine.ALLY_CARD_LIMIT}` : ' · 无副国');
+      info.style.color = deckArr.length > 39 ? '#e08a72' : 'var(--text-dim)';
+    }
+
+    function canAdd(c) {
+      if (deckArr.length >= 39) return { ok: false, why: '卡组已满 39 张' };
+      const limit = Engine.rarityLimit(c);
+      if ((counts[c.id] || 0) >= limit) return { ok: false, why: `已达 ${limit} 张上限（${RARITY_ZH[c.rarity] || c.rarity}）` };
+      if (App.ally && c.nation === App.ally) {
+        if (Engine.isEliteCard(c)) return { ok: false, why: '副国不能携带精英卡' };
+        if (allyCount() >= Engine.ALLY_CARD_LIMIT) return { ok: false, why: `副国卡已达 ${Engine.ALLY_CARD_LIMIT} 张上限` };
+      }
+      return { ok: true };
     }
 
     function renderPool(filter) {
       poolWrap.innerHTML = '';
+      const f = (filter || '').toLowerCase();
       const pool = App.db.cards.filter(c =>
-        (c.nation === App.nation || c.nation === 'Neutral') &&
-        c.type !== 'gotcha' && c.type !== 'location' && c.cost > 0 &&
-        (!filter || c.name.toLowerCase().includes(filter.toLowerCase())));
-      const maxCopies = { Common: 4, Uncommon: 3, Rare: 2, Unique: 1 };
-      for (const c of pool.slice(0, 300)) {
+        (c.nation === App.nation || c.nation === 'Neutral' || (App.ally && c.nation === App.ally)) &&
+        c.type !== 'location' &&
+        (!f || c.name.toLowerCase().includes(f) || (c.text || '').toLowerCase().includes(f)))
+        .sort((a, b) => (a.cost - b.cost) || a.name.localeCompare(b.name));
+      if (!pool.length) {
+        poolWrap.innerHTML = '<div class="collection-empty">没有匹配的卡牌</div>';
+        return;
+      }
+      for (const c of pool.slice(0, 400)) {
+        const n = counts[c.id] || 0;
+        const limit = Engine.rarityLimit(c);
+        const isAllyCard = !!App.ally && c.nation === App.ally;
         const row = document.createElement('div');
         row.className = 'preset-item';
-        const n = counts[c.id] || 0;
-        const max = maxCopies[c.rarity] || 2;
+        const flag = isAllyCard ? '副' : (c.nation === 'Neutral' ? '中' : '主');
         row.innerHTML = `<span class="p-name">${c.name}</span>
-          <span class="p-nation">${c.type} ${c.cost}K${c.attack ? ' ' + c.attack + '/' + c.defense : ''} · x${n}/${max}</span>`;
+          <span class="p-nation">${flag} · ${RARITY_ZH[c.rarity] || c.rarity} · ${c.cost}K${c.attack ? ' ' + c.attack + '/' + c.defense : ''} · x${n}/${limit}</span>`;
         const addBtn = document.createElement('button');
         addBtn.className = 'btn';
         addBtn.style.cssText = 'padding:3px 10px;font-size:11px';
-        addBtn.textContent = n >= max ? '已满' : '＋';
-        addBtn.disabled = n >= max || deckArr.length >= 39;
+        const chk = canAdd(c);
+        addBtn.textContent = chk.ok ? '＋' : '已满';
+        addBtn.disabled = !chk.ok;
+        addBtn.title = chk.why || '';
         addBtn.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          if (deckArr.length < 39 && n < max) {
-            deckArr.push(c.id);
-            counts[c.id] = n + 1;
-            refreshInfo();
-            renderPool(search.value);
-          }
+          const r = canAdd(c);
+          if (!r.ok) { UI.hint && UI.hint(r.why, 1200); return; }
+          deckArr.push(c.id);
+          counts[c.id] = (counts[c.id] || 0) + 1;
+          refreshInfo();
+          renderPool(search.value);
         });
         row.appendChild(addBtn);
         const subBtn = document.createElement('button');
@@ -361,22 +522,43 @@
       }
     }
 
+    allySel.addEventListener('change', () => {
+      App.ally = allySel.value || null;
+      // 换副国后，清掉不再合法的牌
+      for (let i = deckArr.length - 1; i >= 0; i--) {
+        const d = App.db.byId[deckArr[i]];
+        const okNation = d && (d.nation === App.nation || d.nation === 'Neutral' || (App.ally && d.nation === App.ally));
+        if (!okNation) { counts[deckArr[i]]--; deckArr.splice(i, 1); }
+      }
+      refreshInfo();
+      renderPool(search.value);
+    });
+    hqSel.addEventListener('change', () => {
+      App.hqId = hqSel.value;
+    });
+    search.addEventListener('input', () => renderPool(search.value));
+
     const saveBtn = document.createElement('button');
     saveBtn.className = 'btn btn-primary';
     saveBtn.style.cssText = 'width:100%;margin-top:10px';
     saveBtn.textContent = '保存卡组';
     saveBtn.addEventListener('click', () => {
-      if (deckArr.length !== 39) { alert('卡组必须恰好为 39 张（当前 ' + deckArr.length + ' 张）'); return; }
+      const v = Engine.validateDeck(deckArr, App.nation, App.ally, App.db);
+      if (!v.ok) {
+        alert('卡组不符合规则：\n· ' + v.errors.slice(0, 6).join('\n· '));
+        return;
+      }
       App.deck = deckArr;
-      App.hqId = App.db.hqs[App.nation].id;
       App.mode = 'custom';
+      App.presetWarning = null;
       markDeckBtn('btn-build-deck');
-      document.getElementById('deck-name-label').textContent = `自定义${NATION_ZH[App.nation] || App.nation}卡组`;
+      renderHqSelect();
+      renderAllySelect();
+      markDeckLabel();
       modal.classList.add('hidden');
     });
     list.appendChild(saveBtn);
 
-    document.querySelector('.modal-box .modal-title').textContent = '卡组构筑';
     refreshInfo();
     renderPool('');
     modal.classList.remove('hidden');
@@ -384,18 +566,18 @@
 
   // ---------------- AI game ----------------
   function startAIGame() {
-    if (!App.deck || App.deck.length < 30) {
-      App.deck = Engine.autoDeck(App.nation, App.db, Engine.makeRng(99));
-    }
+    if (!App.deck || App.deck.length < 30) rebuildAutoDeck();
     if (!App.hqId) App.hqId = App.db.hqs[App.nation].id;
     const aiNations = NATIONS.filter(n => n !== App.nation);
     const aiNation = aiNations[(Math.random() * aiNations.length) | 0];
-    App.aiDeck = Engine.autoDeck(aiNation, App.db, Engine.makeRng((Math.random() * 1e9) | 0));
+    const aiAlly = Engine.ALLY_NATIONS[(Math.random() * Engine.ALLY_NATIONS.length) | 0];
+    App.aiDeck = Engine.autoDeck(aiNation, App.db, Engine.makeRng((Math.random() * 1e9) | 0),
+      { ally: aiAlly === aiNation ? null : aiAlly });
     App.engine = new Engine.Game({
       db: App.db,
       seed: (Math.random() * 2147483647) | 0,
       decks: [App.deck, App.aiDeck],
-      hqs: [App.db.hqs[App.nation], App.db.hqs[aiNation]],
+      hqs: [hqObj(App.nation), App.db.hqs[aiNation]],
     });
     App.netGame = false;
     App.mySeat = 0;
@@ -544,7 +726,7 @@
 
   // ---------------- LAN game ----------------
   async function createRoom() {
-    if (!App.deck || App.deck.length < 30) App.deck = Engine.autoDeck(App.nation, App.db, Engine.makeRng(5));
+    if (!App.deck || App.deck.length < 30) rebuildAutoDeck();
     if (!App.hqId) App.hqId = App.db.hqs[App.nation].id;
     try {
       await Net.connect();
@@ -553,13 +735,13 @@
       return;
     }
     wireNetHandlers();
-    Net.createRoom(App.deck, App.db.hqs[App.nation], App.nation);
+    Net.createRoom(App.deck, hqObj(App.nation), App.nation, App.ally);
   }
 
   async function joinRoom() {
     const code = document.getElementById('join-code-input').value.trim().toUpperCase();
     if (code.length !== 4) { alert('请输入 4 位房间码'); return; }
-    if (!App.deck || App.deck.length < 30) App.deck = Engine.autoDeck(App.nation, App.db, Engine.makeRng(5));
+    if (!App.deck || App.deck.length < 30) rebuildAutoDeck();
     if (!App.hqId) App.hqId = App.db.hqs[App.nation].id;
     try {
       await Net.connect();
@@ -568,7 +750,7 @@
       return;
     }
     wireNetHandlers();
-    Net.joinRoom(code, App.deck, App.db.hqs[App.nation], App.nation);
+    Net.joinRoom(code, App.deck, hqObj(App.nation), App.nation, App.ally);
     document.getElementById('join-modal').classList.add('hidden');
   }
 

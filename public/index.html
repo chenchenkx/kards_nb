@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KARDS 网页版 - 二战卡牌游戏</title>
-<link rel="stylesheet" href="css/kards.css?v=8">
+<link rel="stylesheet" href="css/kards.css?v=9">
 <link rel="preload" href="data/cards.json" as="fetch" crossorigin>
 </head>
 <body>
@@ -21,6 +21,13 @@
     <div class="start-section">
       <div class="start-label">选择国家</div>
       <div id="nation-grid" class="nation-grid"></div>
+    </div>
+    <div class="start-section">
+      <div class="start-label">总部 / 副国</div>
+      <div class="deck-row">
+        <select id="hq-select" class="code-input" style="flex:1;font-size:12px;padding:6px 8px;letter-spacing:0;text-align:left"></select>
+        <select id="ally-select" class="code-input" style="flex:1;font-size:12px;padding:6px 8px;letter-spacing:0;text-align:left"></select>
+      </div>
     </div>
     <div class="start-section">
       <div class="start-label">卡组 <span id="deck-name-label" class="deck-name-label">自动卡组</span></div>
@@ -40,7 +47,7 @@
     </div>
     <div class="start-lan" id="lan-info"></div>
     <div class="start-footer">
-      <span id="card-count-label"></span> · 玩家自制网页致敬版 · 与 1939 Games 官方无关 · <b style="color:#e8c96a">构建 v8</b>
+      <span id="card-count-label"></span> · 玩家自制网页致敬版 · 与 1939 Games 官方无关 · <b style="color:#e8c96a">构建 v9</b>
     </div>
   </div>
 </div>
@@ -186,10 +193,10 @@
 <!-- card detail popup -->
 <div id="card-popup" class="card-popup hidden"></div>
 
-<script src="js/engine.js?v=8"></script>
-<script src="js/ai.js?v=8"></script>
-<script src="js/net.js?v=8"></script>
-<script src="js/ui.js?v=8"></script>
-<script src="js/main.js?v=8"></script>
+<script src="js/engine.js?v=9"></script>
+<script src="js/ai.js?v=9"></script>
+<script src="js/net.js?v=9"></script>
+<script src="js/ui.js?v=9"></script>
+<script src="js/main.js?v=9"></script>
 </body>
 </html>

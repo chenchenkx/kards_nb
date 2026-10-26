@@ -426,7 +426,8 @@
       el.addEventListener('mouseleave', () => hidePopup());
     }
     const nation = (p.hq && p.hq.nation) || 'Neutral';
-    const img = HQ_IMAGES[nation] || 'Bunker_Blank.jpg';
+    // 优先用该 HQ 卡自带的图（官方 id 精确映射），其次国家兜底，最后占位
+    const img = (p.hq && p.hq.image) || HQ_IMAGES[nation] || 'Bunker_Blank.jpg';
     if (el.dataset.img !== img) {
       el.dataset.img = img;
       el.style.backgroundImage = `url('/assets/hq/${img}')`;
@@ -439,8 +440,11 @@
       el.appendChild(badge);
     }
     const val = Math.max(0, p.hqDef);
-    if (badge.textContent !== String(val)) badge.textContent = val;
+    const armor = p.hqArmor || 0;
+    const label = armor > 0 ? `${val}+${armor}` : String(val);
+    if (badge.textContent !== label) badge.textContent = label;
     badge.classList.toggle('hurt', val < (p.hqMaxDef || 20));
+    badge.classList.toggle('armored', armor > 0);
   }
 
   function setKredit(which, cur, max) {
@@ -505,6 +509,23 @@
     d.style.top = (c.y - 52) + 'px';
     fxLayer().appendChild(d);
     setTimeout(() => d.remove(), 1000);
+  };
+
+  /** 攻击轨迹：一条从攻击者飞向目标的光条 + 命中前拖尾 */
+  UI.fxTrail = function (a, b) {
+    const layer = document.getElementById('fx-layer');
+    if (!layer) return;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    const el = document.createElement('div');
+    el.className = 'attack-trail';
+    el.style.left = a.x + 'px';
+    el.style.top = a.y + 'px';
+    el.style.width = dist + 'px';
+    el.style.transform = `rotate(${angle}deg)`;
+    layer.appendChild(el);
+    setTimeout(() => el.remove(), 420);
   };
 
   UI.fxSpark = function (el) {
@@ -615,6 +636,7 @@
                 { transform: 'translate(0,0) scale(1)' },
               ], { duration: 440, easing: 'cubic-bezier(.35,0,.3,1)' });
             } catch (e) { /* ignore */ }
+            UI.fxTrail(a, b);
             setTimeout(() => {
               UI.fxSpark(toEl);
               try {

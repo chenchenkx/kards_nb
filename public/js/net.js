@@ -47,11 +47,11 @@
     if (Net.ws && Net.ws.readyState === 1) Net.ws.send(JSON.stringify(obj));
   };
 
-  Net.createRoom = function (deck, hq, nation) {
-    Net.send({ t: 'create', deck, hq, nation });
+  Net.createRoom = function (deck, hq, nation, ally) {
+    Net.send({ t: 'create', deck, hq, nation, ally: ally || null });
   };
-  Net.joinRoom = function (code, deck, hq, nation) {
-    Net.send({ t: 'join', code, deck, hq, nation });
+  Net.joinRoom = function (code, deck, hq, nation, ally) {
+    Net.send({ t: 'join', code, deck, hq, nation, ally: ally || null });
   };
   Net.setDeck = function (deck, hq, nation) {
     Net.send({ t: 'setDeck', deck, hq, nation });
