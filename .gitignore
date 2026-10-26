@@ -20,3 +20,6 @@ shots/
 # 系统 / 编辑器 / Agent 工作目录
 .DS_Store
 .workbuddy/
+
+# 覆盖率分析中间产物
+.work/
