@@ -78,6 +78,9 @@
       this.chosenTarget = null;
       this.gotchaUsed = false;
       this._game = game;
+      // 手牌状态与伤害转移（文本级静态监听，不走 op 解析）
+      this._handWatch = parseHandWatch(this.text);
+      this._redirectName = parseRedirect(this.text);
     }
     get totalAttack() {
       if (this._useDefenseAsAttack) return this.totalDefense;
@@ -256,6 +259,30 @@
     return null;
   }
 
+  /** "If in your hand, this unit costs N less/more each time <事件>" → 手牌监听 */
+  function parseHandWatch(text) {
+    const m = /if in your hand,?\s*(?:this unit|reduce)\s*(?:costs?|cost)\s*(\d+)?\s*(less|more)?\s*each time (.+?)\.?$/i.exec(String(text || ''));
+    if (!m) return null;
+    const n = m[1] ? +m[1] : 1;
+    const delta = m[2] && /more/i.test(m[2]) ? n : -n;
+    const tail = m[3].toLowerCase();
+    let event = null;
+    if (/you (?:give|play) an? order|you play an? order/.test(tail)) event = 'order';
+    else if (/your countermeasure triggers/.test(tail)) event = 'gotcha';
+    else if (/you lose a unit/.test(tail)) event = 'ownUnitLost';
+    else if (/your hq takes (?:friendly )?damage/.test(tail)) event = 'ownHqDamaged';
+    else if (/the enemy draws/.test(tail)) event = 'enemyDraw';
+    else if (/enemy countermeasure triggers/.test(tail)) event = 'enemyGotcha';
+    if (!event) return null;
+    return { event, delta };
+  }
+
+  /** "对 X 的伤害转移给本单位" */
+  function parseRedirect(text) {
+    const m = /damage to (.+?) is dealt to this unit instead/i.exec(String(text || ''));
+    return m ? m[1].trim() : null;
+  }
+
   /** 已知触发事件词汇表：命中才把 "when" 句让路给触发解析器（防回归） */
   const TRIGGER_EVENT_RE = new RegExp([
     'destroys? (?:a |an |another |the )?(?:enemy )?unit',
@@ -396,6 +423,35 @@
     // "Reduce attack of this unit by N each time it attacks"
     m = /reduce (?:the )?attack of this unit by (\d+) each time/i.exec(t);
     if (m) { ops.push({ op: 'selfDrainOnAttack', n: +m[1] }); return ops; }
+
+    // ================= Develop 变体 / Convert / HQ 限制 / 条件增伤 =================
+    // "Develop CONVOY HX 175, THE DESERT RATS or FORTIFICATION."（多选一，随机入手）
+    m = /^develop (.+?)\.?$/i.exec(t);
+    if (m && !/^develop an? (?:british|us|german|soviet|japanese|italian|french|polish|finnish|navy|special)/i.test(t)) {
+      const names = m[1].split(/\s*,\s*|\s+or\s+/i).map(s => s.trim()).filter(s => s && s.length > 2);
+      if (names.length) { ops.push({ op: 'addHandAny', names }); return ops; }
+    }
+    // "At the end of turn, Convert into MOSQUITO F Mk II."
+    m = /convert into (.+?)\.?$/i.exec(t);
+    if (m) { ops.push({ op: 'convert', name: m[1].trim() }); return ops; }
+    // "While in the frontline, your HQ cannot be reduced below 1 defense."
+    m = /while in the frontline, your hq cannot be reduced below (\d+)/i.exec(t);
+    if (m) { ops.push({ op: 'hqFloor', n: +m[1] }); return ops; }
+    // "HQs cannot gain defense."
+    if (/hqs? cannot gain defense/i.test(t)) { ops.push({ op: 'hqNoHeal' }); return ops; }
+    // "Deals double damage if <条件>"
+    m = /deals? double damage if (.+?)\.?$/i.exec(t);
+    if (m) {
+      const tail = m[1];
+      let cond = null;
+      if (/frontline is empty/i.test(tail)) cond = { c: 'frontlineEmpty' };
+      else if (/kredit slots?/i.test(tail)) {
+        const num = /\d+/.exec(tail);
+        if (num) cond = { c: 'slotsAtMost', n: +num[0] };
+      }
+      ops.push({ op: 'dmgMod', mult: 2, vs: 'all', cond });
+      return ops;
+    }
 
     // 手牌费用修正类（最左 / 首张指令 / 敌方手牌税）
     m = /the first order you play each turn costs? (\d+) less/i.exec(t);
@@ -1117,6 +1173,8 @@
       }
       case 'nationPlayed': return true;   // 事件触发时已由 nation 过滤
       case 'attackAtLeast': return card && card.totalAttack >= (cond.n || 0);
+      case 'frontlineEmpty': return game.frontline.length === 0;
+      case 'slotsAtMost': return game.players[card.owner].slots <= (cond.n || 0);
       default: return true;
     }
   }
@@ -1406,6 +1464,8 @@
 
     draw(side, n, silent) {
       const p = this.players[side];
+      // "每当你对手抽牌…" 手牌监听
+      this.bumpHandWatches('enemyDraw', 1 - side);
       if (p._noDrawTurns > 0) {
         this.log(`P${side + 1} 被封锁抽牌（剩余 ${p._noDrawTurns} 回合）`);
         return;
@@ -1444,9 +1504,16 @@
         if (amount <= 0) return;
       }
       p.hqDef -= amount;
+      // "While in the frontline, your HQ cannot be reduced below N defense"
+      const floorUnit = this.unitsOf(side).find(u => u._hqFloor && u.loc === 'front');
+      if (floorUnit && p.hqDef < floorUnit._hqFloor) {
+        p.hqDef = floorUnit._hqFloor;
+        this.log(`${floorUnit.name} 保护：总部防御不会低于 ${floorUnit._hqFloor}`);
+      }
       if (!isFatigue) p.hqDamagedThisTurn += amount;
       this.ev({ e: 'hqdamage', side, amount });
       this.log(`P${side + 1} 总部受到 ${amount} 点伤害，剩余 ${Math.max(0, p.hqDef)}`);
+      this.bumpHandWatches('ownHqDamaged', side);
       // 己方总部受击触发（456th RIFLE REGIMENT：+1+1 和守护）
       if (!isFatigue && !this.done) {
         this.fireTrigger('ownHqDamaged', { side, amount }, u => u.owner === side);
@@ -1463,6 +1530,18 @@
     damageCard(c, amount, killer) {
       if (!c || amount <= 0) return;
       if (c._immune) { this.log(`${c.name} 免疫伤害`); return; }
+      // 伤害转移：友方有单位声明"对本卡的伤害转移给它"
+      if (!c._redirected) {
+        const guard = this.unitsOf(c.owner).find(u => u !== c && u._redirectName
+          && c.name.toLowerCase().includes(u._redirectName.toLowerCase()));
+        if (guard) {
+          this.log(`${c.name} 受到的 ${amount} 点伤害转移给 ${guard.name}`);
+          guard._redirected = true;
+          this.damageCard(guard, amount, killer);
+          guard._redirected = false;
+          return;
+        }
+      }
       c.defense -= amount;
       this.ev({ e: 'damage', uid: c.uid, amount });
       this.log(`${c.name} 受到 ${amount} 点伤害，剩余 ${Math.max(0, c.defense)}`);
@@ -1505,6 +1584,7 @@
       this.ev({ e: 'death', uid: c.uid, name: c.name, owner: c.owner });
       this.log(`${c.name} 被摧毁`);
       this.applyAuras();
+      this.bumpHandWatches('ownUnitLost', c.owner);
     }
 
     // ---------- deployment ----------
@@ -1561,6 +1641,7 @@
         this.ev({ e: 'order', uid: c.uid, name: c.name, owner: side });
         const ctx = { fromLeftmost, fromRightmost, target: opts.target || null };
         this.execOrderText(c, ctx);
+        this.bumpHandWatches('order', side);
         this.fireTrigger('ownCardPlayed', { owner: side, nation: c.nation }, u => u.owner === side);
         return { ok: true };
       }
@@ -1783,6 +1864,7 @@
         // 伤害修正（"对坦克双倍伤害" / "对空中单位 +2 伤害" 等）
         if (a._dmgMods) {
           for (const m of a._dmgMods) {
+            if (m.cond && !evalCond(m.cond, a._game, a, {})) continue;
             const okVs = m.vs === 'all' || m.vs === d.type
               || (m.vs === 'air' && (d.type === 'fighter' || d.type === 'bomber'))
               || (m.vs === 'ground' && ['infantry', 'tank', 'artillery'].includes(d.type));
@@ -1886,6 +1968,23 @@
           this.execOps(cl.ops, u, { ...(ctx || {}), trigger: true });
         }
       }
+    }
+
+    /** 手牌监听："每当你 X，此牌费用 -N"（在事件点扫手牌调整 _costMod） */
+    bumpHandWatches(event, side) {
+      const hand = this.players[side] && this.players[side].hand;
+      if (!hand) return;
+      for (const c of hand) {
+        if (!c._handWatch || c._handWatch.event !== event) continue;
+        c._costMod = (c._costMod || 0) + c._handWatch.delta;
+        this.log(`${c.name} 手牌费用 ${c._handWatch.delta > 0 ? '+' : ''}${c._handWatch.delta}（当前 ${c.effCost}）`);
+      }
+    }
+
+    /** 场上是否有"总部不能获得防御"的单位（KAGOSHIMA REGIMENT） */
+    hqHealBlocked() {
+      for (const u of [...this.unitsOf(0), ...this.unitsOf(1)]) if (u._hqNoHeal) return true;
+      return false;
     }
 
     /**
@@ -2110,6 +2209,70 @@
           this.applyAuras();
           break;
         }
+        case 'addHandAny': {
+          // 从候选名里随机取一张加入手牌（Develop 多选一的近似实现）
+          const pool = [];
+          for (const nm of op.names) {
+            const defs = this.findByName(nm, me);
+            if (defs.length) pool.push(defs[0]);
+          }
+          if (!pool.length) { this.log(`（未找到可生成的卡牌：${op.names.join(' / ')}）`); break; }
+          const def = this.rng.pick(pool);
+          const nc = new CardInst(def, me, this);
+          nc.loc = 'hand';
+          if (this.players[me].hand.length < RULES.MAX_HAND) this.players[me].hand.push(nc);
+          else this.players[me].discard.push(nc);
+          this.log(`Develop：${nc.name} 加入手牌`);
+          break;
+        }
+        case 'convert': {
+          // ① 自身变形：At the end of turn, Convert into X（op.name）
+          // ② 目标单位变形：Convert target unit into X（op.to）
+          const targetName = op.name || op.to;
+          if (!op.name) {
+            const targets = op.target === 'allEnemyUnits' || op.target === 'allUnits'
+              ? (op.target === 'allEnemyUnits' ? this.unitsOf(foe) : [...this.unitsOf(0), ...this.unitsOf(1)])
+              : [pickUnit(op.target === 'friendlyUnit' ? 'friendlyUnit' : 'enemyUnit')].filter(Boolean);
+            const tdef = this.findByName(targetName, me)[0] || this.findByName(targetName)[0];
+            if (!tdef) { this.log(`（未找到变形目标：${targetName}）`); break; }
+            for (const t of targets) {
+              const nc = new CardInst(tdef, t.owner, this);
+              nc.uid = t.uid; nc.loc = t.loc; nc.slot = t.slot;
+              nc.summonedTurn = t.summonedTurn; nc.hasAttacked = t.hasAttacked; nc.hasMoved = t.hasMoved;
+              if (t.loc === 'front') { const i = this.frontline.indexOf(t); if (i >= 0) this.frontline[i] = nc; }
+              else { const b = this.players[t.owner].board; const i = b.indexOf(t); if (i >= 0) b[i] = nc; }
+              this.log(`${t.name} 变形为 ${nc.name}`);
+            }
+            break;
+          }
+          const defs = this.findByName(op.name, me);
+          if (!defs.length) { this.log(`（变形目标不存在：${op.name}）`); break; }
+          const nd = new CardInst(defs[0], src.owner, this);
+          nd.uid = src.uid; nd.loc = src.loc; nd.slot = src.slot;
+          nd.summonedTurn = src.summonedTurn;
+          nd.defense = nd.defense;
+          if (src.loc === 'front') {
+            const i = this.frontline.indexOf(src);
+            if (i >= 0) this.frontline[i] = nd;
+          } else if (src.loc === 'board') {
+            const b = this.players[src.owner].board;
+            const i = b.indexOf(src);
+            if (i >= 0) b[i] = nd;
+          }
+          this.log(`${src.name} 变形成 ${nd.name}`);
+          this.ev({ e: 'veteran', uid: nd.uid, name: nd.name, owner: nd.owner });
+          break;
+        }
+        case 'hqFloor': {
+          src._hqFloor = op.n;
+          this.log(`${src.name}：在前线时总部最低保留 ${op.n} 防御`);
+          break;
+        }
+        case 'hqNoHeal': {
+          src._hqNoHeal = true;
+          this.log(`${src.name}：总部无法恢复防御`);
+          break;
+        }
         case 'firstOrderDiscount': {
           const p = this.players[me];
           p._firstOrderDiscount = (p._firstOrderDiscount || 0) + op.n;
@@ -2151,6 +2314,7 @@
         }
         case 'hqDef': {
           // 永久提升：上限与当前防御同时 +N（官方 ChangeDefense(location, N, permanent)）
+          if (this.hqHealBlocked()) { this.log('总部无法获得防御（效果被阻止）'); break; }
           const p = this.players[me];
           p.hqMaxDef += op.n;
           p.hqDef += op.n;
@@ -2643,22 +2807,6 @@
             copy.loc = 'hand';
             p.hand.push(copy);
             this.log(`复制了手牌中的 ${copy.name}`);
-          }
-          break;
-        }
-        case 'convert': {
-          const targets = op.target === 'allEnemyUnits' || op.target === 'allUnits'
-            ? (op.target === 'allEnemyUnits' ? this.unitsOf(foe) : [...this.unitsOf(0), ...this.unitsOf(1)])
-            : [pickUnit(op.target === 'friendlyUnit' ? 'friendlyUnit' : 'enemyUnit')].filter(Boolean);
-          const def = this.findByName(op.to, me)[0] || this.findByName(op.to)[0];
-          if (!def) { this.log(`（未找到变形目标：${op.to}）`); break; }
-          for (const t of targets) {
-            const nc = new CardInst(def, t.owner, this);
-            nc.uid = t.uid; nc.loc = t.loc; nc.slot = t.slot;
-            nc.summonedTurn = t.summonedTurn; nc.hasAttacked = t.hasAttacked; nc.hasMoved = t.hasMoved;
-            if (t.loc === 'front') { const i = this.frontline.indexOf(t); if (i >= 0) this.frontline[i] = nc; }
-            else { const b = this.players[t.owner].board; const i = b.indexOf(t); if (i >= 0) b[i] = nc; }
-            this.log(`${t.name} 变形为 ${nc.name}`);
           }
           break;
         }

@@ -15,6 +15,8 @@ function audit(list, label) {
   const emptyOps = [];
   for (const c of list) {
     const cls = Engine.parseClauses(c.text);
+    // 文本级机制（手牌监听 / 伤害转移）不走子句解析，单独计为已实现
+    if (!cls.length && /if in your hand,.*each time|is dealt to this unit instead/i.test(c.text)) continue;
     if (!cls.length) { none.push(c); continue; }
     if (!cls.some(cl => cl.ops && cl.ops.length)) emptyOps.push(c);
   }

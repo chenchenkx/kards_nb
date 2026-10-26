@@ -173,5 +173,49 @@ function deploy(g, side, def, opts) {
   }
 }
 
+// 8) 手牌监听："每当你使用一张指令，此牌费用 -2"（WELLINGTON）
+{
+  const wt = cards.find(c => /^WELLINGTON$/i.test(c.name));
+  console.log('\n[8]', wt && wt.name, ':', wt && wt.text);
+  if (wt) {
+    const g = game();
+    const w = new Engine.CardInst(wt, 0, g);
+    w.loc = 'hand';
+    g.players[0].hand.push(w);
+    const base = w.effCost;
+    const order = cards.find(c => c.type === 'order' && (c.cost || 0) === 1 && /draw|damage/i.test(c.text || ''));
+    if (order) {
+      const oc = new Engine.CardInst(order, 0, g);
+      oc.loc = 'hand';
+      g.players[0].hand.push(oc);
+      g.players[0].kredits = 20;
+      g.playCard(0, g.players[0].hand.indexOf(oc), {});
+      check('使用指令后手牌费用下降', w.effCost < base, { before: base, after: w.effCost });
+    }
+  }
+}
+
+// 9) 伤害转移："对 STIRLING 的伤害转移给本单位"（GLADIATOR ESCORT）
+{
+  const ge = cards.find(c => /is dealt to this unit instead/i.test(c.text || ''));
+  console.log('\n[9]', ge && ge.name, ':', ge && ge.text);
+  if (ge) {
+    const m = /damage to (.+?) is dealt to this unit instead/i.exec(ge.text);
+    const targetName = m[1].trim();
+    const target = cards.find(c => c.name.toLowerCase().includes(targetName.toLowerCase()));
+    if (target) {
+      const g = game();
+      const guard = deploy(g, 0, ge, { front: false });
+      const victim = put(g, 0, target);
+      victim.defense = 10;
+      const beforeGuard = guard.defense;
+      const beforeVictim = victim.defense;
+      g.damageCard(victim, 3, null);
+      check('伤害被转移到守护单位', victim.defense === beforeVictim && guard.defense === beforeGuard - 3,
+        { victim: victim.defense, guard: guard.defense });
+    }
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
