@@ -584,6 +584,88 @@ html, body {
 }
 @keyframes flash-out { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0; } }
 
+/* ============ 原版对齐特效素材（实测自动画帧） ============
+ * 白烟：原版摧毁时 4-6 团不规则烟云，约 0.6-0.7s 缓慢扩散
+ * 火焰：燃烧摧毁约 0.87s（13 帧 @15fps）持续闪烁，覆盖约 2 张卡宽
+ * 焦痕：摧毁后在桌面留下黑色焦斑
+ * 金爆：胜利时 2 帧内全屏金色绽放
+ * ================================================================ */
+.puff {
+  position: absolute; width: 130px; height: 130px;
+  transform: translate(-50%, -50%);
+  pointer-events: none; border-radius: 50%;
+  background: radial-gradient(circle at 45% 42%,
+    rgba(238,241,244,.92) 0%, rgba(206,211,216,.62) 34%, rgba(158,163,168,.22) 60%, transparent 78%);
+  filter: blur(2.5px);
+  mix-blend-mode: screen;
+}
+.flame {
+  position: absolute; width: 86px; height: 138px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  border-radius: 46% 54% 48% 52% / 74% 70% 30% 26%;
+  background: radial-gradient(ellipse at 50% 66%,
+    rgba(255,250,224,.98) 0%, rgba(255,214,110,.93) 18%, rgba(255,132,32,.8) 44%,
+    rgba(205,48,8,.5) 66%, transparent 84%);
+  filter: blur(.5px);
+  mix-blend-mode: screen;
+}
+.blast-core {
+  position: absolute; width: 150px; height: 150px;
+  transform: translate(-50%, -50%);
+  pointer-events: none; border-radius: 50%;
+  background: radial-gradient(circle,
+    rgba(255,255,246,1) 0%, rgba(255,236,178,.9) 24%, rgba(255,170,66,.6) 48%, transparent 70%);
+  mix-blend-mode: screen;
+}
+.ember {
+  position: absolute; width: 5px; height: 5px;
+  transform: translate(-50%, -50%);
+  pointer-events: none; border-radius: 50%;
+  background: #ffd88a;
+  box-shadow: 0 0 6px 2px rgba(255,160,60,.85);
+}
+.scorch {
+  position: absolute; width: 160px; height: 118px;
+  transform: translate(-50%, -50%);
+  pointer-events: none; border-radius: 50%;
+  background: radial-gradient(ellipse at 50% 50%,
+    rgba(14,10,7,.9) 0%, rgba(28,21,14,.72) 34%, rgba(58,44,30,.28) 62%, transparent 78%);
+  filter: blur(7px);
+  mix-blend-mode: multiply;
+}
+.card-flash {
+  position: absolute; inset: 0; border-radius: 6px;
+  background: #fff; mix-blend-mode: screen; pointer-events: none; opacity: 0;
+}
+.afterimage {
+  position: absolute; pointer-events: none; opacity: 0;
+  filter: brightness(1.4) saturate(.7) blur(.4px);
+}
+.victory-burst {
+  position: absolute; left: 50%; top: 50%;
+  width: 980px; height: 980px;
+  transform: translate(-50%, -50%);
+  pointer-events: none; mix-blend-mode: screen;
+  background:
+    repeating-conic-gradient(from 0deg,
+      rgba(255,222,140,.9) 0deg 3.2deg,
+      rgba(255,180,60,0) 5deg 19deg),
+    radial-gradient(circle,
+      rgba(255,248,214,.98) 0%, rgba(255,206,96,.72) 26%, rgba(255,170,54,.34) 48%, transparent 66%);
+  -webkit-mask-image: radial-gradient(circle, #000 52%, transparent 70%);
+  mask-image: radial-gradient(circle, #000 52%, transparent 70%);
+}
+/* 燃烧尾声的黑烟（对齐原版：火焰烧尽后 0.4-0.5s 黑烟笼罩卡位） */
+.smoke-dark {
+  position: absolute; width: 146px; height: 136px;
+  transform: translate(-50%, -50%);
+  pointer-events: none; border-radius: 50%;
+  background: radial-gradient(circle at 50% 52%,
+    rgba(26,22,18,.88) 0%, rgba(14,11,9,.62) 38%, rgba(8,6,5,.22) 64%, transparent 80%);
+  filter: blur(6px);
+}
+
 /* ============ 回合横幅 ============ */
 .turn-banner {
   position: absolute; left: 0; right: 0; top: 316px; height: 78px;

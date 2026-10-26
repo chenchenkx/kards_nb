@@ -867,6 +867,11 @@
     title.className = 'gameover-title ' + (win ? 'win' : 'lose');
     sub.textContent = win ? '敌军总部已被摧毁，战役胜利！' : '你的总部已被攻陷，战役失败。';
     modal.classList.remove('hidden');
+    // 胜利金爆（对齐原版胜利瞬间的全屏金色绽放）
+    if (win) {
+      if (UI.fxVictory) UI.fxVictory();
+      SFX.play('victory');
+    }
   }
 
   // AI action relay for UI

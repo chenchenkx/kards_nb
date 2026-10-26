@@ -55,16 +55,17 @@
   // 所有卡牌交互动画统一走 GSAP；未加载时退化为无动画（不破坏功能）
   const G = () => window.gsap || null;
 
-  /** 桌面震动（打击感基础） */
+  /** 桌面震动（打击感基础）：短、硬、机械式衰减 —— 对齐原版"干脆"的冲击节奏 */
   UI.shake = function (px) {
     const g = G(); if (!g || !px) return;
-    px = Math.min(px, 10);
+    px = Math.min(px, 12);
     g.fromTo('#table', { x: 0, y: 0 }, {
       keyframes: [
-        { x: -px, y: px * 0.35 }, { x: px * 0.7, y: -px * 0.5 },
-        { x: -px * 0.45, y: px * 0.25 }, { x: 0, y: 0 },
+        { x: -px, y: px * 0.5 }, { x: px * 0.85, y: -px * 0.62 },
+        { x: -px * 0.6, y: px * 0.3 }, { x: px * 0.32, y: -px * 0.16 },
+        { x: -px * 0.12, y: 0 }, { x: 0, y: 0 },
       ],
-      duration: 0.3, ease: 'power1.out', overwrite: 'auto',
+      duration: 0.13, ease: 'none', overwrite: 'auto',
     });
   };
 
@@ -154,6 +155,20 @@
     const alt = imgSrcAlt(view);
     const tag = el.querySelector('.card-nametag');
     if (tag) tag.textContent = view.name || '';
+
+    // 受损卡面焦黑（对齐原版 gif_04 帧 113+：受伤单位卡面随伤害比例变暗，属性徽标保持明亮）
+    if (img) {
+      const maxDef = typeof view.maxDef === 'number' ? view.maxDef : 0;
+      const curDef = typeof view.defense === 'number' ? view.defense : maxDef;
+      const ratio = maxDef > 0 ? Math.max(0, Math.min(1, 1 - curDef / maxDef)) : 0;
+      if (ratio > 0.01) {
+        img.style.filter = `brightness(${(1.1 - 0.74 * ratio).toFixed(2)}) saturate(${(0.98 - 0.72 * ratio).toFixed(2)})`;
+        el.classList.add('damaged');
+      } else {
+        img.style.filter = '';
+        el.classList.remove('damaged');
+      }
+    }
 
     if (!src) {
       el.classList.add('no-img');
@@ -528,14 +543,17 @@
     const g = G();
     try {
       const c = centerInTable(el);
-      UI.fxSmoke(c);
+      // 对齐原版摧毁：火焰燃烧 + 多团白烟 + 桌面焦痕
+      UI.fxBurst(c, { small: true });
+      UI.fxPuffs(c, { n: 7, spread: 58, life: 0.72 });
+      UI.fxScorch(c);
       SFX.play('death');
     } catch (e) { /* ignore */ }
     if (g) {
       gsap.to(el, {
-        y: 12, scale: 0.78, rotation: '-=7', opacity: 0,
-        filter: 'brightness(0.25) saturate(0.4)',
-        duration: 0.42, ease: 'power2.in', overwrite: 'auto',
+        y: 12, scale: 0.76, rotation: '-=8', opacity: 0,
+        filter: 'brightness(0.18) saturate(0.35)',
+        duration: 0.38, ease: 'power2.in', overwrite: 'auto',
         onComplete: () => { if (el.parentNode) el.parentNode.removeChild(el); },
       });
     } else {
@@ -585,13 +603,202 @@
     setTimeout(() => { s.remove(); r.remove(); sl.remove(); }, 700);
   };
 
-  UI.fxSmoke = function (c) {
+  /**
+   * 多团白烟 —— 对齐原版摧毁烟雾（gif_04 帧 2-8）：
+   * 4-6 团大小/位置随机的烟云，0.6-0.8s 缓慢外扩消散，不是单个规整圆。
+   */
+  UI.fxPuffs = function (c, opts) {
+    const g = G();
+    if (!g || !c) return;
+    const n = (opts && opts.n) || 5;
+    const spread = (opts && opts.spread) || 46;
+    const life = (opts && opts.life) || 0.68;
+    for (let i = 0; i < n; i++) {
+      const d = document.createElement('div');
+      d.className = 'puff';
+      const ox = (Math.random() * 2 - 1) * spread;
+      const oy = (Math.random() * 2 - 1) * spread * 0.5;
+      d.style.left = (c.x + ox) + 'px';
+      d.style.top = (c.y + oy) + 'px';
+      fxLayer().appendChild(d);
+      const sc = 0.45 + Math.random() * 0.55;
+      const grow = sc * (1.9 + Math.random() * 0.9);
+      g.timeline()
+        .fromTo(d, { scale: 0.18, opacity: 0 },
+          { scale: sc, opacity: 0.72 + Math.random() * 0.22, duration: 0.1, ease: 'power2.out' })
+        .to(d, {
+          x: ox * 0.45 + (Math.random() * 24 - 12),
+          y: oy * 0.35 - 16 - Math.random() * 20,
+          scale: grow, opacity: 0, duration: life * (0.8 + Math.random() * 0.4), ease: 'power1.out',
+        }, 0.03 + Math.random() * 0.14)
+        .add(() => d.remove());
+    }
+  };
+
+  /**
+   * 燃烧爆裂 —— 对齐原版命中/摧毁火焰（gif_04 帧 32-45）：
+   * 白闪核心 + 6 条火焰舌（各自随机闪烁）+ 火星，总时长约 0.85-0.95s。
+   */
+  UI.fxBurst = function (c, opts) {
+    const g = G();
+    if (!g || !c) return;
+    const big = !(opts && opts.small);
+    const scale = big ? 1 : 0.72;
+
+    // ① 中央白闪核心（200ms 内炸开消散）
+    const core = document.createElement('div');
+    core.className = 'blast-core';
+    core.style.left = c.x + 'px';
+    core.style.top = c.y + 'px';
+    fxLayer().appendChild(core);
+    g.timeline().fromTo(core, { scale: 0.25 * scale, opacity: 0.95 },
+      { scale: 1.9 * scale, opacity: 0, duration: 0.26, ease: 'power3.out' })
+      .add(() => core.remove());
+
+    // ② 火焰舌：6 条，随机方位/大小，各自独立闪烁（原版帧间亮度起伏大）
+    const n = big ? 6 : 4;
+    for (let i = 0; i < n; i++) {
+      const f = document.createElement('div');
+      f.className = 'flame';
+      const ang = (Math.PI * 2 * i) / n + (Math.random() - 0.5) * 0.9;
+      const dist = (14 + Math.random() * 30) * scale;
+      f.style.left = c.x + 'px';
+      f.style.top = c.y + 'px';
+      fxLayer().appendChild(f);
+      const tl = g.timeline({ delay: i * 0.028 + Math.random() * 0.03 });
+      tl.fromTo(f, { scale: 0.2 * scale, opacity: 0, rotation: (Math.random() - 0.5) * 40 },
+        { scale: (0.78 + Math.random() * 0.4) * scale, opacity: 0.95, rotation: (Math.random() - 0.5) * 16,
+          duration: 0.09, ease: 'back.out(2.2)' })
+        .to(f, {
+          x: Math.cos(ang) * dist, y: Math.sin(ang) * dist - 8 * scale,
+          duration: 0.16, ease: 'power2.out',
+        }, 0);
+      // 闪烁：6 段随机脉冲
+      for (let k = 0; k < 6; k++) {
+        tl.to(f, {
+          scale: (0.72 + Math.random() * 0.62) * scale,
+          opacity: 0.62 + Math.random() * 0.38,
+          x: Math.cos(ang) * (dist + (Math.random() * 10 - 5)),
+          y: Math.sin(ang) * dist - 8 * scale + (Math.random() * 10 - 5),
+          duration: 0.05 + Math.random() * 0.04, ease: 'none',
+        });
+      }
+      tl.to(f, { scale: (0.45 + Math.random() * 0.3) * scale, opacity: 0.4, duration: 0.13, ease: 'power2.in' })
+        .to(f, { scale: 0.1, opacity: 0, duration: 0.14, ease: 'power2.in' })
+        .add(() => f.remove());
+    }
+
+    // ③ 烧尽后的黑烟（原版：火焰熄灭后黑烟笼罩约 0.45s）
+    setTimeout(() => UI.fxDarkSmoke(c, { n: 4 }), 520);
+
+    // ③ 火星：向外飞散 + 下坠
+    const ne = big ? 9 : 5;
+    for (let i = 0; i < ne; i++) {
+      const e = document.createElement('div');
+      e.className = 'ember';
+      e.style.left = c.x + 'px';
+      e.style.top = c.y + 'px';
+      fxLayer().appendChild(e);
+      const ang = Math.random() * Math.PI * 2;
+      const r = 26 + Math.random() * 46;
+      g.timeline({ delay: Math.random() * 0.12 }).to(e, {
+        x: Math.cos(ang) * r, y: Math.sin(ang) * r * 0.7 + 12,
+        scale: 0.2, opacity: 0,
+        duration: 0.36 + Math.random() * 0.3, ease: 'power2.out',
+      })
+        .add(() => e.remove());
+    }
+  };
+
+  /** 焦痕：摧毁后桌面残留的黑色焦斑（约 2.4s 后淡出） */
+  UI.fxScorch = function (c) {
+    const g = G();
+    if (!g || !c) return;
     const s = document.createElement('div');
-    s.className = 'smoke';
+    s.className = 'scorch';
     s.style.left = c.x + 'px';
     s.style.top = c.y + 'px';
+    s.style.opacity = '0';
     fxLayer().appendChild(s);
-    setTimeout(() => s.remove(), 750);
+    g.timeline()
+      .to(s, { opacity: 0.85, scale: 1, duration: 0.12, ease: 'power2.out' })
+      .to(s, { opacity: 0, duration: 0.7, ease: 'power1.in' }, '+=1.7')
+      .add(() => s.remove());
+  };
+
+  /** 燃烧黑烟（原版火焰烧尽后的黑烟阶段，约 0.45s 散去） */
+  UI.fxDarkSmoke = function (c, opts) {
+    const g = G();
+    if (!g || !c) return;
+    const n = (opts && opts.n) || 4;
+    for (let i = 0; i < n; i++) {
+      const d = document.createElement('div');
+      d.className = 'smoke-dark';
+      const ox = (Math.random() * 2 - 1) * 26;
+      const oy = (Math.random() * 2 - 1) * 16;
+      d.style.left = (c.x + ox) + 'px';
+      d.style.top = (c.y + oy) + 'px';
+      fxLayer().appendChild(d);
+      const sc = 0.6 + Math.random() * 0.5;
+      g.timeline()
+        .fromTo(d, { scale: 0.35, opacity: 0 }, { scale: sc, opacity: 0.82, duration: 0.12, ease: 'power2.out' })
+        .to(d, { x: ox * 0.4, y: oy - 20, scale: sc * 1.7, opacity: 0, duration: 0.42, ease: 'power1.out' }, 0.06)
+        .add(() => d.remove());
+    }
+  };
+
+  /** 卡牌白闪：命中瞬间的高光覆盖（90ms 拉满 → 180ms 消退） */
+  UI.fxCardFlash = function (el) {
+    const g = G();
+    if (!g || !el) return;
+    const f = document.createElement('div');
+    f.className = 'card-flash';
+    el.appendChild(f);
+    g.timeline()
+      .fromTo(f, { opacity: 0 }, { opacity: 0.62, duration: 0.04, ease: 'power4.out' })
+      .to(f, { opacity: 0, duration: 0.17, ease: 'power2.in' })
+      .add(() => f.remove());
+  };
+
+  /** 残影：出牌坠落时的 2 层拖影（对齐原版重量感的运动模糊） */
+  UI.fxAfterimage = function (el, dy) {
+    const g = G();
+    if (!g || !el) return;
+    const table = document.getElementById('table');
+    if (!table) return;
+    const r = el.getBoundingClientRect();
+    const t = table.getBoundingClientRect();
+    const sc = SCALE || 1;
+    for (let i = 0; i < 2; i++) {
+      const c = el.cloneNode(true);
+      c.classList.add('afterimage');
+      c.removeAttribute('data-uid');
+      c.style.cssText = `left:${(r.left - t.left) / sc}px; top:${(r.top - t.top) / sc}px;`
+        + `width:${r.width / sc}px; height:${r.height / sc}px;`;
+      fxLayer().appendChild(c);
+      g.timeline().fromTo(c, { opacity: 0.34 - i * 0.14, y: dy * (0.42 + i * 0.34), scale: 1 + i * 0.05 },
+        { opacity: 0, duration: 0.18 + i * 0.07, ease: 'power1.out' })
+        .add(() => c.remove());
+    }
+  };
+
+  /** 胜利金爆：全屏金色绽放 —— 对齐原版胜利瞬间（gif_06 帧 46-47 全屏 25910px 金色） */
+  UI.fxVictory = function () {
+    const g = G();
+    if (!g) return;
+    const w = document.createElement('div');
+    w.className = 'victory-burst';
+    fxLayer().appendChild(w);
+    g.timeline()
+      .fromTo(w, { scale: 0.15, opacity: 0, rotation: -18 },
+        { scale: 1, opacity: 1, rotation: 0, duration: 0.16, ease: 'back.out(2.4)' })
+      .to(w, { scale: 1.18, opacity: 0, duration: 0.62, ease: 'power2.in' }, '+=0.28')
+      .add(() => w.remove());
+  };
+
+  /** 摧毁白烟（保留旧接口，内部改为多团烟云） */
+  UI.fxSmoke = function (c) {
+    UI.fxPuffs(c, { n: 6, spread: 52, life: 0.72 });
   };
 
   UI.fxHQHit = function (which, amount) {
@@ -691,34 +898,39 @@
             SFX.play('whoosh');
             UI.fxTrail(a, b);
             const tl = gsap.timeline({ onComplete: next });
-            // ① 蓄力：微微后压
-            tl.to(fromEl, {
-              x: -dx * 0.09, y: -dy * 0.09, scale: 0.96,
-              duration: 0.13, ease: 'power2.out',
-            })
-              // ② 冲撞：加速扑向目标
-              .to(fromEl, {
-                x: dx * 0.62, y: dy * 0.62, scale: 1.1,
-                duration: 0.14, ease: 'power3.in',
+              // ① 蓄力：更短更紧的后压
+              tl.to(fromEl, {
+                x: -dx * 0.08, y: -dy * 0.08, scale: 0.94,
+                duration: 0.1, ease: 'power2.out',
               })
-              // ③ 命中瞬间：受击方击退 + 弹性晃回
+              // ② 冲撞：更快更远（power4.in = 加速撞击）
+              .to(fromEl, {
+                x: dx * 0.7, y: dy * 0.7, scale: 1.13,
+                duration: 0.12, ease: 'power4.in',
+              })
+              // ③ 命中瞬间：白闪 + 火焰爆裂 + 硬击退 + 干脆震动
               .add(() => {
                 SFX.play('hit');
-                UI.fxSpark(toEl);
-                UI.shake(6);
-                gsap.fromTo(toEl, { filter: 'brightness(2.6) saturate(1.4)' },
-                  { filter: 'brightness(1) saturate(1)', duration: 0.32, ease: 'power2.out', overwrite: 'auto' });
+                UI.fxCardFlash(toEl);
+                UI.fxBurst(centerInTable(toEl), {});
+                UI.shake(7);
+                // 受击方：55ms 推出 12% 距离 → 110ms 硬回位（原版无回弹尾巴）
                 gsap.timeline({ overwrite: 'auto' })
-                  .to(toEl, { x: dx * 0.17, y: dy * 0.17, duration: 0.08, ease: 'power3.out' })
-                  .to(toEl, { x: 0, y: 0, duration: 0.5, ease: 'elastic.out(1.15, 0.38)' });
+                  .to(toEl, {
+                    x: dx * 0.12, y: dy * 0.12, rotation: dx > 0 ? 1.8 : -1.8,
+                    duration: 0.055, ease: 'power4.out',
+                  })
+                  .to(toEl, { x: 0, y: 0, rotation: 0, duration: 0.11, ease: 'power2.out' });
+                gsap.fromTo(toEl, { filter: 'brightness(2.4) saturate(1.4)' },
+                  { filter: 'brightness(1) saturate(1)', duration: 0.22, ease: 'power2.out', overwrite: 'auto' });
               })
-              // ④ 攻击方收势回位
+              // ④ 攻击方收势（干脆，不做拖沓回弹）
               .to(fromEl, {
                 x: 0, y: 0, scale: 1,
-                duration: 0.3, ease: 'power2.inOut',
-              }, '+=0.02');
-            // 声明本步骤时长：伤害飘字等后续事件等命中之后再出现
-            return 560;
+                duration: 0.24, ease: 'power3.out',
+              }, '+=0.06');
+            // 声明本步骤时长：让火焰/伤害飘字在命中之后展开
+            return 620;
           });
         }
       } else if (ev.e === 'damage') {
@@ -739,26 +951,30 @@
             const tl = gsap.timeline({
               onComplete: () => { gsap.set(el, { clearProps: 'transform,filter' }); next(); },
             });
-            // ① 高空砸落：back.out 回弹 = 拍在桌上的重量感
-            tl.fromTo(el, { y: -95, scale: 1.3, opacity: 0, rotation: -3 },
-              { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.36, ease: 'back.out(1.9)' })
-              // ② 落地震颤：轻微放大再缩回
-              .to(el, { scale: 1.12, duration: 0.07, ease: 'power2.out' })
-              .to(el, { scale: 1, duration: 0.2, ease: 'elastic.out(1.1, 0.42)' })
-              // ③ 落地尘环 + 桌面微震
+            // ① 落地：从拖拽大卡（1.38x）快速缩回 —— 原版实测仅 2 帧（≈67ms），
+            //    这里拉长到 0.2s 保留"手感"，但保持干脆
+            tl.add(() => UI.fxAfterimage(el, -46), 0)
+              .fromTo(el, { y: -70, scale: 1.34, opacity: 0.6, rotation: -2.5 },
+                { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.2, ease: 'back.out(1.5)' })
+              // ② 落地压扁-回弹（幅度克制，避免卡通化）
+              .to(el, { scaleX: 1.05, scaleY: 0.94, duration: 0.05, ease: 'power4.out' })
+              .to(el, { scaleX: 1, scaleY: 1, duration: 0.13, ease: 'elastic.out(1.2, 0.5)' })
+              // ③ 冲击：小范围尘烟 + 短促硬震 + 细环
               .add(() => {
+                UI.fxPuffs(c, { n: 3, spread: 26, life: 0.42 });
+                UI.fxCardFlash(el);
+                UI.shake(6);
                 const r = document.createElement('div');
                 r.className = 'ring';
                 r.style.left = c.x + 'px';
                 r.style.top = c.y + 'px';
                 fxLayer().appendChild(r);
                 setTimeout(() => r.remove(), 650);
-                UI.shake(4);
-              }, '-=0.18')
+              }, '-=0.1')
               // ④ 出场高光渐收
-              .fromTo(el, { filter: 'brightness(1.9) saturate(1.25)' },
-                { filter: 'brightness(1) saturate(1)', duration: 0.4, ease: 'power1.out' }, '-=0.2');
-            return 640;   // 让下一步（伤害/攻击等）等落地完成
+              .fromTo(el, { filter: 'brightness(1.8) saturate(1.2)' },
+                { filter: 'brightness(1) saturate(1)', duration: 0.24, ease: 'power2.out' }, '-=0.26');
+            return 430;
           });
         }
       } else if (ev.e === 'turn') {
@@ -997,8 +1213,13 @@
     ghost.style.top = (e.clientY - drag.offY) + 'px';
     ghost.style.width = r.width + 'px';
     ghost.style.height = r.height + 'px';
-    ghost.style.transform = 'rotate(2deg) scale(1.04)';
+    // 对齐原版拖拽：卡牌放大到约 1.4 倍跟随指针（实测录像 31.5s 段）
     ghost.style.position = 'fixed';
+    ghost.style.transform = 'rotate(2deg) scale(1.38)';
+    if (window.gsap) {
+      gsap.fromTo(ghost, { scale: 1.04, rotation: 1 },
+        { scale: 1.38, rotation: 2, duration: 0.09, ease: 'power2.out' });
+    }
     document.body.appendChild(ghost);
     drag.ghost = ghost;
     drag.el.classList.add('dragging-src');

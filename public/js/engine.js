@@ -60,6 +60,7 @@
       this.opCost = def.opCost || 0;
       this.attack = def.attack || 0;
       this.defense = def.defense || 0;
+      this.maxDef = def.defense || 0;    // 原始印刷生命（受损卡面焦黑比例用）
       this.range = def.range || 1;
       this.text = def.text || '';
       this.keywords = new Set((def.keywords || []).map(k => String(k).toLowerCase()));
@@ -98,7 +99,7 @@
       return {
         uid: this.uid, id: this.id, owner: this.owner, loc: this.loc,
         attack: this.attack, defense: this.defense, buffAttack: this.buffAttack, buffDefense: this.buffDefense,
-        totalAttack: this.totalAttack, totalDefense: this.totalDefense,
+        totalAttack: this.totalAttack, totalDefense: this.totalDefense, maxDef: this.maxDef,
         keywords: [...this.keywords], summonedTurn: this.summonedTurn,
         attacksLeft: this.attacksLeft, hasAttacked: this.hasAttacked, hasMoved: this.hasMoved,
         gotchaActive: this.gotchaActive, name: this.name, type: this.type, nation: this.nation,

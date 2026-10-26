@@ -164,6 +164,11 @@
       tone(c, out, t0, 130, 0.16, 0.14, 'square');
       tone(c, out, t0 + 0.08, 98, 0.18, 0.12, 'square');
     },
+    /** 胜利：金色上行和弦 + 余韵 */
+    victory(c, out, t0) {
+      [392, 523.25, 659.25, 783.99].forEach((f, i) => tone(c, out, t0 + i * 0.09, f, 0.32, 0.11, 'triangle'));
+      boom(c, out, t0, 120, 40, 0.5, 0.35);
+    },
   };
 
   function synth(name) {
