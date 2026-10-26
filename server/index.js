@@ -8,7 +8,12 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { WebSocketServer } = require('ws');
+let WebSocketServer = null;
+try {
+  ({ WebSocketServer } = require('ws'));
+} catch (e) {
+  console.warn('[警告] 未安装 ws 模块 —— 联机对战不可用，单人（人机）模式正常。');
+}
 const Engine = require('../public/js/engine.js');
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
@@ -167,9 +172,9 @@ function handleAction(room, player, msg) {
 }
 
 // ---------------- websocket ----------------
-const wss = new WebSocketServer({ server });
+const wss = WebSocketServer ? new WebSocketServer({ server }) : null;
 
-wss.on('connection', (ws) => {
+if (wss) wss.on('connection', (ws) => {
   const conn = { ws, room: null, seat: -1, deck: null, hq: null, nation: null };
   ws.on('message', (raw) => {
     let msg;
