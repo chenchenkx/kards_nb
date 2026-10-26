@@ -271,6 +271,12 @@ def main():
     hqs = sorted(hq_seen.values(), key=lambda h: (h["nation"], not h["isDefault"], h["campaign"], h["name"], h["defense"]))
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # 只写运行时真的会用到的字段（flavor/artist/各类 is* 标记在 v15 之后已无引用，
+    # 占原文件一半以上体积；客户端首屏要 parse 这份 JSON）
+    KEEP = ("id", "name", "type", "nation", "rarity", "set", "cost", "opCost",
+            "attack", "defense", "range", "text", "keywords", "heavyArmor",
+            "image", "spawn")
+    out = [{k: c[k] for k in KEEP if k in c} for c in out]
     (OUT_DIR / "cards.json").write_text(
         json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     (OUT_DIR / "hqs.json").write_text(
