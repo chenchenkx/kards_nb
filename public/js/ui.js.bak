@@ -1,0 +1,724 @@
+/* ============================================================
+ * KARDS Web - UI layer (pixel-faithful battle table)
+ * ============================================================ */
+(function () {
+  'use strict';
+
+  const UI = {};
+  window.UI = UI;
+
+  // ---------- HQ card images (official art) ----------
+  const HQ_IMAGES = {
+    Germany: 'Danzig.jpg', USA: 'Cherbourg.jpg', Soviet: 'Stalingrad.jpg',
+    Japan: 'Truk.jpg', Britain: 'London.jpg', France: 'Villers_Bocage.jpg',
+    Italy: 'Tunis.jpg', Poland: 'Arnhem.jpg', Finland: 'Bunker_Blank.jpg',
+    Anzac: 'Darwin_Fortress_Blank.jpg', Neutral: 'Bunker_Blank.jpg',
+  };
+  const NATION_FLAG = { Germany: '🇩🇪', USA: '🇺🇸', Soviet: '☭', Japan: '🇯🇵', Britain: '🇬🇧', France: '🇫🇷', Italy: '🇮🇹', Poland: '🇵🇱', Finland: '🇫🇮', Anzac: '🇦🇺', Neutral: '⚑' };
+  const AVATAR = (nation) => '/assets/avatars/' + String(nation || 'Neutral').toLowerCase() + '.jpg';
+
+  // ---------- table scaling (1280x720 design canvas) ----------
+  function fitTable() {
+    const t = document.getElementById('table');
+    if (!t) return;
+    const s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    t.style.transform = `translate(-50%, -50%) scale(${s})`;
+  }
+  window.addEventListener('resize', fitTable);
+  UI.fitTable = fitTable;
+
+  // ---------- card face builder ----------
+  const TYPE_ICON = { infantry: '🪖', tank: '🛡', artillery: '💥', fighter: '✈', bomber: '🛩', order: '📜', gotcha: '🕳', location: '📍', hq: '★' };
+  const TYPE_NAME = { infantry: '步兵', tank: '坦克', artillery: '火炮', fighter: '战斗机', bomber: '轰炸机', order: '指令', gotcha: '反制', location: '地点', hq: '总部' };
+  const KEYWORD_ZH = { blitz: '闪击', fury: '奋战', guard: '守护', smokescreen: '烟幕', ambush: '伏击', shock: '冲击', covert: '隐蔽', deployment: '部署', destruction: '亡计', alpine: '山地', pincer: '钳形', mobilize: '动员', salvage: '打捞', scrying: '窥探' };
+
+  function imgUrl(card, small) {
+    if (!card.image) return null;
+    if (small && card.image.startsWith('img/')) {
+      return '/cards/' + card.image.replace(/^img\//, 'thumb/').replace(/\.png$/, '.jpg');
+    }
+    return '/cards/' + card.image;
+  }
+
+  UI.buildCardEl = function (card, opts) {
+    opts = opts || {};
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.dataset.uid = card.uid;
+    el.dataset.nation = card.nation;
+    el.dataset.cardId = card.id;
+    const url = imgUrl(card, opts.small);
+    if (url) {
+      const img = document.createElement('img');
+      img.className = 'card-img';
+      img.src = url;
+      img.alt = card.name;
+      img.loading = 'lazy';
+      img.draggable = false;
+      img.onerror = () => {
+        if (url.includes('/thumb/') && card.image) {
+          img.src = '/cards/' + card.image;
+        } else {
+          el.classList.add('no-img');
+          el.appendChild(buildFallbackFace(card));
+          img.remove();
+        }
+      };
+      el.appendChild(img);
+    } else {
+      el.classList.add('no-img');
+      el.appendChild(buildFallbackFace(card));
+    }
+    // defense badge for board units (diamond, bottom-right)
+    if (card.type !== 'order' && card.type !== 'gotcha' && card.type !== 'hq' && opts.badge !== false) {
+      const badge = document.createElement('div');
+      badge.className = 'unit-def-badge';
+      badge.textContent = card.defense;
+      el.appendChild(badge);
+    }
+    return el;
+  };
+
+  function buildFallbackFace(card) {
+    const f = document.createElement('div');
+    f.className = 'card-fallback';
+    const cost = document.createElement('div');
+    cost.className = 'cf-cost';
+    cost.textContent = card.cost != null ? card.cost : '';
+    f.appendChild(cost);
+    const art = document.createElement('div');
+    art.className = 'cf-art';
+    art.textContent = TYPE_ICON[card.type] || '★';
+    f.appendChild(art);
+    const name = document.createElement('div');
+    name.className = 'cf-name';
+    name.textContent = card.name;
+    f.appendChild(name);
+    const type = document.createElement('div');
+    type.className = 'cf-type';
+    type.textContent = TYPE_NAME[card.type] || card.type;
+    f.appendChild(type);
+    if (card.type !== 'order' && card.type !== 'gotcha') {
+      const stats = document.createElement('div');
+      stats.className = 'cf-stats';
+      const atk = document.createElement('div');
+      atk.className = 'cf-atk';
+      atk.textContent = card.totalAttack != null ? card.totalAttack : card.attack;
+      const ico = document.createElement('div');
+      ico.className = 'cf-typeicon';
+      ico.textContent = TYPE_ICON[card.type] || '';
+      const def = document.createElement('div');
+      def.className = 'cf-def';
+      def.textContent = card.defense;
+      stats.appendChild(atk); stats.appendChild(ico); stats.appendChild(def);
+      f.appendChild(stats);
+    }
+    if (card.text) {
+      const txt = document.createElement('div');
+      txt.className = 'cf-text';
+      txt.textContent = card.text;
+      f.appendChild(txt);
+    }
+    if (card.keywords && card.keywords.length) {
+      const kw = document.createElement('div');
+      kw.className = 'cf-kw';
+      kw.textContent = card.keywords.map(k => k.replace(/heavyArmor(\d)/, '重甲 $1').replace(/^[a-z]+$/, m => KEYWORD_ZH[m] || m)).join(' · ');
+      f.appendChild(kw);
+    }
+    return f;
+  }
+
+  // ---------- popup ----------
+  let popupEl = null;
+  UI.showPopup = function (card, x, y) {
+    hidePopup();
+    popupEl = document.getElementById('card-popup');
+    const def = card.def || card;
+    const img = def.image ? `<img src="/cards/${def.image}" style="width:100%;border-radius:3px;margin-bottom:8px;border:1px solid #3a332a">` : '';
+    popupEl.innerHTML = `
+      ${img}
+      <div class="cp-name">${escapeHtml(card.name || def.name)}</div>
+      <div class="cp-meta">${card.nation || def.nation} · ${TYPE_NAME[card.type] || def.type}${card.rarity ? ' · ' + card.rarity : ''}</div>
+      <div class="cp-stats">
+        ${card.type !== 'order' && card.type !== 'gotcha' ? `<div class="cp-stat"><b>${card.totalAttack != null ? card.totalAttack : card.attack}</b><span>攻击</span></div>` : ''}
+        ${card.type !== 'order' && card.type !== 'gotcha' ? `<div class="cp-stat"><b>${card.defense}</b><span>防御</span></div>` : ''}
+        ${card.cost ? `<div class="cp-stat"><b>${card.cost}</b><span>部署费用</span></div>` : ''}
+        ${card.opCost ? `<div class="cp-stat"><b>${card.opCost}</b><span>行动费用</span></div>` : ''}
+      </div>
+      ${card.text ? `<div class="cp-text">${escapeHtml(card.text)}</div>` : ''}
+      ${card.keywords && card.keywords.length ? `<div class="cp-kw">${card.keywords.map(k => k.replace(/heavyArmor(\d)/, '重甲 $&'.replace('heavyArmor', '')).replace(/^[a-z]+$/, m => KEYWORD_ZH[m] || m)).join(' · ')}</div>` : ''}
+      ${card.flavor ? `<div class="cp-flavor">${escapeHtml(card.flavor)}</div>` : ''}
+    `;
+    popupEl.classList.remove('hidden');
+    const rect = popupEl.getBoundingClientRect();
+    let px = x + 20, py = y - rect.height / 2;
+    if (px + rect.width > window.innerWidth - 10) px = x - rect.width - 20;
+    py = Math.max(8, Math.min(window.innerHeight - rect.height - 8, py));
+    popupEl.style.left = px + 'px';
+    popupEl.style.top = py + 'px';
+  };
+  function hidePopup() { if (popupEl) popupEl.classList.add('hidden'); }
+  UI.hidePopup = hidePopup;
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  UI.escapeHtml = escapeHtml;
+
+  // ---------- fx ----------
+  const fx = () => document.getElementById('fx-layer');
+  function elCenter(el) {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+
+  UI.fxDamage = function (el, amount, heal) {
+    if (!el) return;
+    const c = elCenter(el);
+    const d = document.createElement('div');
+    d.className = 'dmg-number' + (heal ? ' heal' : '');
+    d.textContent = (heal ? '+' : '-') + amount;
+    d.style.left = (c.x - 14) + 'px';
+    d.style.top = (c.y - 30) + 'px';
+    fx().appendChild(d);
+    setTimeout(() => d.remove(), 1200);
+  };
+
+  UI.fxImpact = function (el) {
+    if (!el) return;
+    const c = elCenter(el);
+    const d = document.createElement('div');
+    d.className = 'impact';
+    d.style.left = (c.x - 30) + 'px';
+    d.style.top = (c.y - 30) + 'px';
+    fx().appendChild(d);
+    setTimeout(() => d.remove(), 450);
+  };
+
+  UI.fxRing = function (el) {
+    if (!el) return;
+    const c = elCenter(el);
+    const d = document.createElement('div');
+    d.className = 'explosion-ring';
+    d.style.width = '70px'; d.style.height = '70px';
+    d.style.left = (c.x - 35) + 'px';
+    d.style.top = (c.y - 35) + 'px';
+    fx().appendChild(d);
+    setTimeout(() => d.remove(), 600);
+  };
+
+  UI.turnBanner = function (text, sub) {
+    const b = document.getElementById('turn-banner');
+    b.innerHTML = `<div class="tb-inner">${escapeHtml(text)}${sub ? `<div style="font-size:14px;letter-spacing:0.2em;margin-top:4px;color:#b8b09a">${escapeHtml(sub)}</div>` : ''}</div>`;
+    b.classList.remove('hidden');
+    setTimeout(() => b.classList.add('hidden'), 1400);
+  };
+
+  UI.logLine = function (line, cls) {
+    const p = document.getElementById('log-panel');
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = line;
+    p.appendChild(d);
+    while (p.children.length > 60) p.removeChild(p.firstChild);
+    p.scrollTop = p.scrollHeight;
+  };
+
+  UI.clearLog = function () {
+    document.getElementById('log-panel').innerHTML = '';
+  };
+
+  // ---------- HQ render（HQ 卡是支援线行的组成部分） ----------
+  let hqEls = {}; // {own: el, opp: el}
+
+  UI.buildHqEl = function (which, hqDefs) {
+    const el = document.createElement('div');
+    el.className = 'card hq-card';
+    el.dataset.hq = which;
+    const img = HQ_IMAGES[hqDefs.nation] || 'Bunker_Blank.jpg';
+    el.style.backgroundImage = `url('/assets/hq/${img}')`;
+    el.title = hqDefs.name;
+    const badge = document.createElement('div');
+    badge.className = 'hq-def-badge';
+    badge.textContent = '20';
+    el.appendChild(badge);
+    el.addEventListener('mouseenter', (ev) => {
+      UI.showPopup({ name: hqDefs.name, nation: hqDefs.nation, type: 'hq', defense: 20, text: hqDefs.text || '', image: null }, ev.clientX, ev.clientY);
+    });
+    el.addEventListener('mouseleave', () => UI.hidePopup());
+    hqEls[which] = el;
+    return el;
+  };
+
+  UI.renderHQ = function (which, hqDef, hqDefs) {
+    let el = hqEls[which];
+    if (!el) { el = UI.buildHqEl(which, hqDefs); }
+    const badge = el.querySelector('.hq-def-badge');
+    if (badge) {
+      badge.textContent = hqDef;
+      badge.classList.toggle('damaged', hqDef < 20);
+    }
+  };
+
+  UI.fxHQHit = function (side, amount) {
+    const which = side === 0 ? 'own' : 'opp';
+    const el = hqEls[which];
+    if (!el) return;
+    el.classList.remove('hq-shake');
+    void el.offsetWidth;
+    el.classList.add('hq-shake');
+    const badge = el.querySelector('.hq-def-badge');
+    if (badge) {
+      const d = document.createElement('div');
+      d.className = 'def-delta';
+      d.textContent = '-' + amount;
+      badge.appendChild(d);
+      setTimeout(() => d.remove(), 1000);
+    }
+  };
+
+  // ---------- state ----------
+  UI.state = null;
+  UI.mySide = 0;
+  UI.selectedHand = -1;
+  UI.selectedUnit = -1;
+  UI.mode = 'idle';
+  UI.onAction = null;
+
+  function findEl(uid) {
+    return document.querySelector(`.card[data-uid="${uid}"]`);
+  }
+
+  UI.render = function (state) {
+    UI.state = state;
+    const me = state.you;
+    UI.mySide = me;
+    renderSide(state, me, 'own');
+    renderSide(state, 1 - me, 'opp');
+    renderFrontline(state);
+    renderHand(state, me);
+    renderOppHand(state, me);
+    // kredit badges
+    setKredits('own', state.players[me].kredits, state.players[me].slots);
+    setKredits('opp', state.players[1 - me].kredits, state.players[1 - me].slots);
+    // HQ 卡（行内元素，renderSide 已创建；这里刷新防御数值）
+    UI.renderHQ('own', state.players[me].hqDef, state.players[me].hq);
+    UI.renderHQ('opp', state.players[1 - me].hqDef, state.players[1 - me].hq);
+    // player names
+    document.getElementById('own-name').textContent = '你' + (state.lanMode ? ' · P' + (me + 1) : '');
+    document.getElementById('opp-name').textContent = state.oppName || '对手';
+    // 真实指挥官头像
+    const ownAv = document.getElementById('own-avatar');
+    const oppAv = document.getElementById('opp-avatar');
+    const ownNat = (state.players[me].hq && state.players[me].hq.nation) || 'Neutral';
+    const oppNat = (state.players[1 - me].hq && state.players[1 - me].hq.nation) || 'Neutral';
+    if (ownAv) { ownAv.style.backgroundImage = `url('${AVATAR(ownNat)}')`; ownAv.textContent = ''; }
+    if (oppAv) { oppAv.style.backgroundImage = `url('${AVATAR(oppNat)}')`; oppAv.textContent = ''; }
+    // frontline: 虚线（未占领）/ 实线+箭头（占领，箭头指向敌人）
+    const line = document.getElementById('frontline-line');
+    if (line) {
+      const owner = state.frontlineOwner;
+      line.classList.remove('owned', 'dir-up', 'dir-down', 'owner-own', 'owner-opp');
+      if (owner !== -1 && owner !== undefined && owner !== null) {
+        line.classList.add('owned');
+        if (owner === me) { line.classList.add('owner-own', 'dir-up'); }   // 我占领→箭头指向上方敌人
+        else { line.classList.add('owner-opp', 'dir-down'); }              // 敌占领→箭头指向下方自己
+      }
+    }
+    const fl = document.getElementById('frontline');
+    // end turn button
+    document.getElementById('btn-end-turn').classList.toggle('active-turn', state.current === me && !state.done);
+    refreshHighlights();
+  };
+
+  function setKredits(which, cur, max) {
+    const b = document.getElementById(which + '-kredit');
+    if (!b) return;
+    const curEl = b.querySelector('.kb-cur');
+    const maxEl = b.querySelector('.kb-max');
+    if (curEl.textContent !== String(cur)) {
+      curEl.textContent = cur;
+      b.classList.remove('kredit-flash');
+      void b.offsetWidth;
+      b.classList.add('kredit-flash');
+    }
+    maxEl.textContent = max;
+  }
+
+  function renderSide(state, side, which) {
+    const row = document.getElementById(which === 'own' ? 'row-own-support' : 'row-opp-support');
+    row.innerHTML = '';
+    const p = state.players[side];
+    // 镜像布局：我方视角 [HQ][单位…]，对手视角 [单位…][HQ]（整组居中）
+    if (which === 'own') row.appendChild(UI.buildHqEl('own', p.hq));
+    // 4 个单位槽
+    const slots = [];
+    for (let i = 0; i < 4; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'row-slot';
+      row.appendChild(slot);
+      slots.push(slot);
+    }
+    if (which === 'opp') row.appendChild(UI.buildHqEl('opp', p.hq));
+    p.board.forEach((card, i) => {
+      if (i >= 4) return;
+      const el = UI.buildCardEl(card, { small: true });
+      el.dataset.loc = 'board';
+      bindBoardCard(el, card, side);
+      slots[i].appendChild(el);
+      slots[i].classList.add('filled');
+    });
+  }
+
+  function renderFrontline(state) {
+    const row = document.getElementById('row-frontline');
+    row.innerHTML = '';
+    const slots = [];
+    for (let i = 0; i < 5; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'row-slot';
+      row.appendChild(slot);
+      slots.push(slot);
+    }
+    state.frontline.forEach((card, i) => {
+      if (i >= 5) return;
+      const el = UI.buildCardEl(card, { small: true });
+      el.dataset.loc = 'front';
+      bindBoardCard(el, card, card.owner);
+      slots[i].appendChild(el);
+      slots[i].classList.add('filled');
+    });
+  }
+
+  function fanLayout(container, count, opts) {
+    // 按截图实测：卡片 108px 宽，重叠加扇形旋转
+    opts = opts || {};
+    const maxSpan = opts.maxSpan || 460;
+    const step = Math.max(34, Math.min(66, (maxSpan - 108) / Math.max(1, count - 1)));
+    const cards = container.children;
+    const mid = (count - 1) / 2;
+    for (let i = 0; i < cards.length; i++) {
+      const el = cards[i];
+      const rot = opts.reverse ? (mid - i) * 0.7 : (i - mid) * 0.7;
+      const ty = Math.abs(i - mid) * 1.2;
+      el.style.marginLeft = i === 0 ? '0' : '-' + (108 - step) + 'px';
+      el.style.transform = `rotate(${rot}deg) translateY(${ty}px)`;
+      el.style.zIndex = String(opts.reverse ? count - i : i + 1);
+    }
+  }
+
+  function renderHand(state, me) {
+    const hand = document.getElementById('own-hand');
+    hand.innerHTML = '';
+    const p = state.players[me];
+    p.hand.forEach((card, idx) => {
+      const el = UI.buildCardEl(card);
+      el.dataset.handIndex = idx;
+      const playable = !state.done && state.current === me && card.cost <= p.kredits;
+      if (playable) el.classList.add('playable');
+      else el.classList.add('dim');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (state.done || state.current !== me) return;
+        if (UI.selectedHand === idx) {
+          UI.playHandCard(idx);
+        } else {
+          UI.selectedHand = idx;
+          UI.selectedUnit = -1;
+          refreshHighlights();
+        }
+      });
+      el.addEventListener('mouseenter', (ev) => {
+        const def = window.CARD_DB && window.CARD_DB.byId[card.id];
+        UI.showPopup(Object.assign({}, def, card), ev.clientX, ev.clientY);
+      });
+      el.addEventListener('mouseleave', () => UI.hidePopup());
+      hand.appendChild(el);
+    });
+    fanLayout(hand, p.hand.length, {});
+  }
+
+  function renderOppHand(state, me) {
+    const wrap = document.getElementById('opp-hand');
+    if (!wrap) return;
+    const count = state.players[1 - me].handCount;
+    wrap.innerHTML = '';
+    const n = Math.min(count, 10);
+    for (let i = 0; i < n; i++) {
+      const b = document.createElement('div');
+      b.className = 'card-back';
+      wrap.appendChild(b);
+    }
+    fanLayout(wrap, n, { reverse: true, maxSpan: 420 });
+  }
+
+  function bindBoardCard(el, card, side) {
+    if (side === UI.mySide && card.type !== 'order') {
+      el.classList.add('own-unit');
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        onBoardCardClick(card);
+      });
+    }
+    el.addEventListener('mouseenter', (ev) => {
+      const def = window.CARD_DB && window.CARD_DB.byId[card.id];
+      UI.showPopup(Object.assign({}, def, card), ev.clientX, ev.clientY);
+    });
+    el.addEventListener('mouseleave', () => UI.hidePopup());
+  }
+
+  function onBoardCardClick(card) {
+    const state = UI.state;
+    if (state.done || state.current !== UI.mySide) return;
+    if (UI.selectedUnit === card.uid) {
+      UI.selectedUnit = -1;
+      refreshHighlights();
+      return;
+    }
+    UI.selectedHand = -1;
+    UI.selectedUnit = card.uid;
+    refreshHighlights();
+    showUnitActions(card);
+  }
+
+  // ---------- unit actions menu ----------
+  let actionMenu = null;
+  function showUnitActions(card) {
+    hideActionMenu();
+    const g = UI.engine;
+    if (!g) return;
+    const el = findEl(card.uid);
+    if (!el) return;
+    const inst = g.find ? g.find(card.uid) : null;
+    if (!inst) return;
+    const canFront = g.canMove(inst, true);
+    const canBack = g.canMove(inst, false);
+    const canAtk = g.canAttack(inst);
+    const opts = [];
+    if (canFront) opts.push({ label: '→ 前往前线', act: () => UI.doAction('move', { uid: card.uid, toFront: true }) });
+    if (canBack) opts.push({ label: '← 撤回支援', act: () => UI.doAction('move', { uid: card.uid, toFront: false }) });
+    if (canAtk) opts.push({ label: '⚔ 发起攻击', act: () => startTargeting(card) });
+    if (!opts.length) return;
+    actionMenu = document.createElement('div');
+    actionMenu.className = 'card-popup';
+    actionMenu.style.pointerEvents = 'auto';
+    const r = el.getBoundingClientRect();
+    actionMenu.style.left = Math.min(window.innerWidth - 170, r.left + r.width / 2 - 75) + 'px';
+    actionMenu.style.top = (r.top - 100) + 'px';
+    actionMenu.innerHTML = opts.map((o, i) => `<button class="btn" data-i="${i}" style="width:100%;margin:3px 0;font-size:12px;padding:8px">${o.label}</button>`).join('');
+    actionMenu.querySelectorAll('button').forEach((b, i) => {
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); opts[i].act(); hideActionMenu(); });
+    });
+    document.body.appendChild(actionMenu);
+  }
+  function hideActionMenu() { if (actionMenu) { actionMenu.remove(); actionMenu = null; } }
+  UI.hideActionMenu = hideActionMenu;
+
+  // ---------- targeting ----------
+  function startTargeting(card) {
+    const g = UI.engine;
+    if (!g) return;
+    const inst = g.find ? g.find(card.uid) : null;
+    if (!inst) return;
+    const targets = g.attackTargets(inst);
+    if (!targets.length) return;
+    UI.mode = 'targeting';
+    UI.pendingAttacker = card.uid;
+    const hint = document.getElementById('target-hint');
+    hint.textContent = '选择攻击目标';
+    hint.classList.remove('hidden');
+    for (const t of targets) {
+      if (t === 0) {
+        const wrap = hqEls['opp'];
+        if (wrap) {
+          wrap.classList.add('targetable');
+          wrap.style.cursor = 'crosshair';
+          wrap.onclick = (ev) => {
+            ev.stopPropagation();
+            UI.doAction('attack', { uid: card.uid, target: 0 });
+            cancelTargeting();
+          };
+        }
+        continue;
+      }
+      const el = findEl(t);
+      if (el) {
+        el.classList.add('targetable');
+        el.onclick = (ev) => {
+          ev.stopPropagation();
+          UI.doAction('attack', { uid: card.uid, target: t });
+          cancelTargeting();
+        };
+      }
+    }
+  }
+  function cancelTargeting() {
+    UI.mode = 'idle';
+    UI.pendingAttacker = null;
+    const hint = document.getElementById('target-hint');
+    if (hint) hint.classList.add('hidden');
+    document.querySelectorAll('.targetable').forEach(e => e.classList.remove('targetable'));
+    const w = hqEls['opp'];
+    if (w) { w.style.cursor = ''; w.onclick = null; }
+  }
+  UI.cancelTargeting = cancelTargeting;
+
+  // ---------- highlights ----------
+  function refreshHighlights() {
+    const state = UI.state;
+    if (!state) return;
+    const me = state.you;
+    const g = UI.engine;
+    document.querySelectorAll('#own-hand .card').forEach(el => {
+      el.classList.toggle('selected', +el.dataset.handIndex === UI.selectedHand);
+    });
+    document.querySelectorAll('.card[data-uid]').forEach(el => {
+      const uid = +el.dataset.uid;
+      el.classList.toggle('selected', uid === UI.selectedUnit);
+      const card = findCardInState(state, uid);
+      if (!card) return;
+      if (card.owner === me && g && g.find) {
+        const inst = g.find(uid);
+        const canAct = inst && ((g.canAttack && g.canAttack(inst)) ||
+          (g.canMove && (g.canMove(inst, true) || g.canMove(inst, false))));
+        el.classList.toggle('can-act', !!canAct && state.current === me && !state.done);
+      }
+    });
+  }
+  UI.refreshHighlights = refreshHighlights;
+
+  function findCardInState(state, uid) {
+    for (const c of state.frontline) if (c.uid === uid) return c;
+    for (const p of state.players) for (const c of p.board) if (c.uid === uid) return c;
+    return null;
+  }
+
+  // ---------- play hand card ----------
+  UI.playHandCard = function (idx) {
+    const state = UI.state;
+    const me = state.you;
+    const card = state.players[me].hand[idx];
+    if (!card) return;
+    if (card.cost > state.players[me].kredits) return;
+    if (card.type === 'order' && card.targets && card.targets.length) {
+      startOrderTargeting(card, idx);
+      return;
+    }
+    UI.doAction('play', { handIndex: idx });
+    UI.selectedHand = -1;
+    refreshHighlights();
+  };
+
+  function startOrderTargeting(card, handIndex) {
+    UI.mode = 'targeting';
+    UI.pendingOrder = { handIndex, cardId: card.id };
+    const hint = document.getElementById('target-hint');
+    hint.textContent = `选择目标：${card.name}`;
+    hint.classList.remove('hidden');
+    for (const t of card.targets) {
+      const el = findEl(t);
+      if (el) {
+        el.classList.add('targetable');
+        el.onclick = (ev) => {
+          ev.stopPropagation();
+          UI.doAction('play', { handIndex, target: t });
+          cancelTargeting();
+          UI.selectedHand = -1;
+          refreshHighlights();
+        };
+      }
+    }
+  }
+
+  // ---------- action dispatch ----------
+  UI.doAction = function (type, payload) {
+    hideActionMenu();
+    if (UI.onAction) UI.onAction(type, payload);
+  };
+
+  // ---------- animations from events ----------
+  UI.playEvents = function (events, done) {
+    const chain = [];
+    for (const ev of events) {
+      switch (ev.e) {
+        case 'attack': {
+          const fromEl = findEl(ev.from);
+          const toEl = ev.to === 0 ? hqEls['opp'] : findEl(ev.to);
+          if (fromEl && toEl) {
+            chain.push(() => {
+              fromEl.classList.add('attacking');
+              const toC = elCenter(toEl), fromC = elCenter(fromEl);
+              fromEl.classList.add(toC.x > fromC.x ? 'lunge-right' : 'lunge-left');
+              setTimeout(() => {
+                UI.fxImpact(toEl);
+                UI.fxRing(toEl);
+                fromEl.classList.remove('attacking', 'lunge-right', 'lunge-left');
+              }, 220);
+            });
+          }
+          break;
+        }
+        case 'damage': {
+          const el = findEl(ev.uid);
+          if (el) {
+            chain.push(() => {
+              el.classList.remove('hit-flash'); void el.offsetWidth; el.classList.add('hit-flash');
+              UI.fxDamage(el, ev.amount);
+            });
+          }
+          break;
+        }
+        case 'hqdamage': {
+          const dispSide = ev.side === UI.mySide ? 0 : 1;
+          chain.push(() => UI.fxHQHit(dispSide, ev.amount));
+          break;
+        }
+        case 'death': {
+          const el = findEl(ev.uid);
+          if (el) {
+            chain.push(() => {
+              el.classList.add('unit-dead');
+              UI.fxRing(el);
+            });
+          }
+          break;
+        }
+        case 'deploy': {
+          const el = findEl(ev.uid);
+          if (el) chain.push(() => { el.classList.add('deploy-anim'); });
+          break;
+        }
+        case 'turn': {
+          const mine = ev.side === UI.mySide;
+          chain.push(() => UI.turnBanner(mine ? '你的回合' : '敌方回合', `第 ${ev.turn} 回合 · ${ev.kredits} 指挥点`));
+          break;
+        }
+        default: break;
+      }
+    }
+    let i = 0;
+    const step = () => {
+      if (i >= chain.length) { if (done) done(); return; }
+      chain[i++]();
+      setTimeout(step, 130);
+    };
+    step();
+  };
+
+  // click anywhere cancels selection
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.card') && !e.target.closest('.card-popup') &&
+        !e.target.closest('.hq-slot') && !e.target.closest('.game-btn') && !e.target.closest('.btn')) {
+      UI.selectedHand = -1;
+      UI.selectedUnit = -1;
+      cancelTargeting();
+      refreshHighlights();
+    }
+  });
+
+  // scale table on load
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fitTable);
+  } else fitTable();
+
+})();

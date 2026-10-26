@@ -1,0 +1,22 @@
+# 依赖 / 构建产物
+node_modules/
+*.log
+
+# 本地美术素材仓库（719MB，仅开发时需要的原始图库）
+kards-img/
+
+# 资料与研究脚本（部署不需要）
+ref/
+generated-images/
+kards-sim/
+kardscm/
+kards-image-tool/
+tree.json
+_unused/
+
+# 截图
+shots/
+
+# 系统 / 编辑器 / Agent 工作目录
+.DS_Store
+.workbuddy/

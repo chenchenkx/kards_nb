@@ -1,0 +1,23 @@
+{
+  "name": "kards-web",
+  "version": "1.0.0",
+  "description": "KARDS Web - The WWII Card Game (web + LAN remake)",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node tools/ruletest.js && node tools/selftest.js 10 && node tools/uitest.js",
+    "test:lan": "node tools/lantest.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
