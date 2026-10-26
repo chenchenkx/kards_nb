@@ -22,12 +22,23 @@
   };
 
   // ---------------- boot ----------------
+  /** 让浏览器先完成一次绘制，再做重活（2.3MB JSON 解析 + 建库不堵首屏） */
+  function afterPaint() {
+    return new Promise(resolve => {
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+    });
+  }
+
   async function boot() {
+    const bootStatus = document.getElementById('boot-status');
+    if (bootStatus) { bootStatus.textContent = '正在载入卡牌数据…'; bootStatus.classList.remove('hidden'); }
     const [cards, hqs, deckcodes] = await Promise.all([
       fetch('data/cards.json').then(r => r.json()),
       fetch('data/hqs.json').then(r => r.json()),
       fetch('data/deckcodes.json').then(r => r.json()).catch(() => ({ codes: {} })),
     ]);
+    // 先让起始界面完成绘制，再做建库与网格渲染
+    await afterPaint();
     window.DECK_CODES = deckcodes.codes || {};
     App.db = Engine.buildDb(cards, hqs);
     window.CARD_DB = App.db;
@@ -38,6 +49,7 @@
     fetchLanInfo();
     // preload engine into UI
     UI.engine = null;
+    if (bootStatus) bootStatus.classList.add('hidden');
   }
 
   function fetchLanInfo() {
@@ -54,7 +66,26 @@
   // 官方五大主国（有 HQ/location 数据）；其余五个国家只能当副国
   const NATIONS = Engine.MAJOR_NATIONS.slice();
   const ALLY_NATIONS = Engine.ALLY_NATIONS.slice();
-  const NATION_FLAGS = { Germany: '🇩🇪', USA: '🇺🇸', Soviet: '☭', Japan: '🇯🇵', Britain: '🇬🇧', France: '🇫🇷', Italy: '🇮🇹', Poland: '🇵🇱', Finland: '🇫🇮', Anzac: '🇦🇺' };
+  // 国旗用内联 SVG（Emoji 在 Windows/Android/iOS 上样式差异极大，且部分平台不显示）
+  const FLAG_SVG = {
+    Germany: "<rect width='30' height='6.67' fill='#111'/><rect y='6.67' width='30' height='6.67' fill='#d22'/><rect y='13.33' width='30' height='6.67' fill='#f3c500'/>",
+    USA: "<rect width='30' height='20' fill='#fff'/><g fill='#b22234'><rect width='30' height='1.54'/><rect y='3.08' width='30' height='1.54'/><rect y='6.15' width='30' height='1.54'/><rect y='9.23' width='30' height='1.54'/><rect y='12.31' width='30' height='1.54'/><rect y='15.38' width='30' height='1.54'/><rect y='18.46' width='30' height='1.54'/></g><rect width='12' height='10.77' fill='#3c3b6e'/><g fill='#fff'><circle cx='2.4' cy='2' r='.7'/><circle cx='6' cy='2' r='.7'/><circle cx='9.6' cy='2' r='.7'/><circle cx='4.2' cy='5' r='.7'/><circle cx='7.8' cy='5' r='.7'/><circle cx='2.4' cy='8' r='.7'/><circle cx='6' cy='8' r='.7'/><circle cx='9.6' cy='8' r='.7'/></g>",
+    Soviet: "<rect width='30' height='20' fill='#c8102e'/><path d='M8 4.2l1.05 3.2h3.4l-2.75 2 1.05 3.2L8 10.6 5.25 12.6l1.05-3.2L3.55 7.4h3.4z' fill='#f7c600'/>",
+    Japan: "<rect width='30' height='20' fill='#fff'/><circle cx='15' cy='10' r='6' fill='#bc002d'/>",
+    Britain: "<rect width='30' height='20' fill='#012169'/><path d='M0 0l30 20M30 0L0 20' stroke='#fff' stroke-width='4'/><path d='M0 0l30 20M30 0L0 20' stroke='#c8102e' stroke-width='1.8'/><path d='M15 0v20M0 10h30' stroke='#fff' stroke-width='6.7'/><path d='M15 0v20M0 10h30' stroke='#c8102e' stroke-width='4'/>",
+    France: "<rect width='10' height='20' fill='#002395'/><rect x='10' width='10' height='20' fill='#fff'/><rect x='20' width='10' height='20' fill='#ed2939'/>",
+    Italy: "<rect width='10' height='20' fill='#009246'/><rect x='10' width='10' height='20' fill='#fff'/><rect x='20' width='10' height='20' fill='#ce2b37'/>",
+    Poland: "<rect width='30' height='10' fill='#fff'/><rect y='10' width='30' height='10' fill='#dc143c'/>",
+    Finland: "<rect width='30' height='20' fill='#fff'/><path d='M0 8h30M11 0v20' stroke='#003580' stroke-width='4'/>",
+    Anzac: "<rect width='30' height='20' fill='#00247d'/><g fill='#fff'><circle cx='22' cy='6' r='1.1'/><circle cx='25' cy='12' r='1.1'/><circle cx='20' cy='15' r='1.1'/><circle cx='24' cy='17' r='1'/><circle cx='17' cy='9' r='.9'/></g><rect width='12' height='9' fill='#012169'/><path d='M0 0l12 9M12 0L0 9' stroke='#fff' stroke-width='1.6'/><path d='M6 0v9M0 4.5h12' stroke='#fff' stroke-width='2.6'/><path d='M6 0v9M0 4.5h12' stroke='#c8102e' stroke-width='1.4'/>",
+    Neutral: "<rect width='30' height='20' fill='#8a8a8a'/>",
+  };
+  function flagImg(n) {
+    const body = FLAG_SVG[n] || FLAG_SVG.Neutral;
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 20'>${body}</svg>`;
+    return `<img class="flag-img" alt="" src="data:image/svg+xml,${encodeURIComponent(svg)}">`;
+  }
+  const NATION_FLAGS = {};   // 兼容旧引用
   const NATION_ZH = { Germany: '德国', USA: '美国', Soviet: '苏联', Japan: '日本', Britain: '英国', France: '法国', Italy: '意大利', Poland: '波兰', Finland: '芬兰', Anzac: '澳新军团', Neutral: '中立' };
 
   function buildNationGrid() {
@@ -64,7 +95,7 @@
       const chip = document.createElement('div');
       chip.className = 'nation-chip' + (n === App.nation ? ' selected' : '');
       chip.dataset.nation = n;
-      chip.innerHTML = `<span class="flag">${NATION_FLAGS[n]}</span>${NATION_ZH[n] || n}`;
+      chip.innerHTML = `<span class="flag">${flagImg(n)}</span>${NATION_ZH[n] || n}`;
       chip.title = NATION_ZH[n] || n;
       chip.addEventListener('click', () => selectNation(n));
       grid.appendChild(chip);

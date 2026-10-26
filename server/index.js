@@ -28,6 +28,25 @@ const MIME = {
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
 };
 
+/**
+ * 静态文件 stat 缓存：短时间内重复请求不再触发同步 syscall。
+ * 命中后 5s 内直接复用；未命中（含 404）也缓存 2s，避免扫目录打爆磁盘。
+ */
+const statCache = new Map();      // filePath -> { at, st }
+const STAT_TTL_HIT = 5000;
+const STAT_TTL_MISS = 2000;
+function statCached(filePath) {
+  const now = Date.now();
+  const hit = statCache.get(filePath);
+  if (hit && now - hit.at < (hit.st ? STAT_TTL_HIT : STAT_TTL_MISS)) return hit.st;
+  let st = null;
+  try { st = fs.statSync(filePath); } catch (e) { st = null; }
+  // 缓存过大时整体丢弃，防止长期运行内存膨胀
+  if (statCache.size > 4000) statCache.clear();
+  statCache.set(filePath, { at: now, st });
+  return st;
+}
+
 const server = http.createServer((req, res) => {
   try {
     let urlPath = decodeURIComponent(req.url.split('?')[0]);
@@ -69,9 +88,9 @@ const server = http.createServer((req, res) => {
     } else if (urlPath.startsWith('/data/')) base = path.join(__dirname, '..', 'data');
     else base = ROOT;
     if (!filePath.startsWith(base)) { res.writeHead(403); res.end('Forbidden'); return; }
-    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
-      res.writeHead(404); res.end('Not Found'); return;
-    }
+    // stat 结果缓存（热路径不再每次同步 syscall）
+    const st = statCached(filePath);
+    if (!st || !st.isFile()) { res.writeHead(404); res.end('Not Found'); return; }
     const ext = path.extname(filePath).toLowerCase();
     // 代码/页面必须每次校验，图片可长缓存（避免改了 UI 但浏览器还跑旧文件）
     const noStore = ['.html', '.js', '.css', '.json'].includes(ext);
@@ -86,6 +105,43 @@ const server = http.createServer((req, res) => {
     res.writeHead(500); res.end('Server Error');
   }
 });
+
+// ---------------- 输入校验（防恶意客户端） ----------------
+const MAX_DECK = 39;
+
+/** 卡组校验：必须是数组、张数 1..39、每个元素都是已知卡牌 id */
+function sanitizeDeck(deck) {
+  if (!Array.isArray(deck)) return { ok: false, error: '卡组必须是数组' };
+  if (deck.length === 0) return { ok: false, error: '卡组为空' };
+  if (deck.length > MAX_DECK) return { ok: false, error: `卡组张数不能超过 ${MAX_DECK}` };
+  const out = new Array(deck.length);
+  for (let i = 0; i < deck.length; i++) {
+    const id = deck[i];
+    if (typeof id !== 'string' || id.length === 0 || id.length > 64) {
+      return { ok: false, error: '卡牌 id 非法' };
+    }
+    if (!Object.prototype.hasOwnProperty.call(db.byId, id)) {
+      return { ok: false, error: '未知卡牌 id: ' + id };
+    }
+    out[i] = id;
+  }
+  return { ok: true, deck: out };
+}
+
+/** 总部校验：必须是卡库里已知的总部；否则回落到该国家默认总部 */
+function sanitizeHq(hq, nation) {
+  if (hq && typeof hq === 'object' && typeof hq.id === 'string'
+      && db.hqById && db.hqById[hq.id]) {
+    return db.hqById[hq.id];
+  }
+  const fallback = (db.hqs && (db.hqs[nation] || Object.values(db.hqs)[0])) || null;
+  return fallback;
+}
+
+function sanitizeNation(n) {
+  if (typeof n !== 'string' || n.length > 24) return null;
+  return db.hqs && db.hqs[n] ? n : null;
+}
 
 // ---------------- rooms ----------------
 const rooms = new Map(); // code -> room
@@ -159,11 +215,23 @@ function startGame(room) {
       if (!v.ok) console.log(`[房间 ${room.code}] 座位 ${p.seat} 卡组非法:`, v.errors.slice(0, 3).join('; '));
     } catch (e) { /* ignore */ }
   }
-  room.game = new Engine.Game({
-    db, seed,
-    decks: [room.players[0].deck, room.players[1].deck],
-    hqs: [room.players[0].hq, room.players[1].hq],
-  });
+  try {
+    room.game = new Engine.Game({
+      db, seed,
+      decks: [room.players[0].deck, room.players[1].deck],
+      hqs: [room.players[0].hq, room.players[1].hq],
+    });
+  } catch (e) {
+    // 卡组/总部数据异常时不要让整个进程崩掉
+    console.log(`[房间 ${room.code}] 开局失败:`, e && e.message);
+    for (const p of room.players) {
+      if (!p) continue;
+      try { p.ws.send(JSON.stringify({ t: 'error', error: '开局失败（卡组数据异常），请重新选卡' })); } catch (err) { /* ignore */ }
+    }
+    room.started = false;
+    room.game = null;
+    return;
+  }
   room.started = true;
   for (const p of room.players) {
     p.ws.send(JSON.stringify({ t: 'start', you: p.seat, seed }));
@@ -172,6 +240,7 @@ function startGame(room) {
 }
 
 function handleAction(room, player, msg) {
+  room.lastActive = Date.now();
   const g = room.game;
   if (!g || !room.started) return;
   const seat = player.seat;
@@ -221,13 +290,16 @@ wss.on('connection', (ws) => {
           // leave old room
           if (conn.room) leaveRoom(conn);
           const code = genCode();
-          const room = { code, players: [conn, null], game: null, started: false };
+          const room = { code, players: [conn, null], game: null, started: false, lastActive: Date.now() };
           rooms.set(code, room);
           conn.room = room; conn.seat = 0;
-          conn.deck = msg.deck || null;
-          conn.hq = msg.hq || null;
-          conn.nation = msg.nation || null;
-          conn.ally = msg.ally || null;
+          const cNat = sanitizeNation(msg.nation);
+          const cDeck = msg.deck ? sanitizeDeck(msg.deck) : { ok: true, deck: null };
+          if (msg.deck && !cDeck.ok) { ws.send(JSON.stringify({ t: 'error', error: '卡组非法：' + cDeck.error })); break; }
+          conn.deck = cDeck.deck;
+          conn.hq = sanitizeHq(msg.hq, cNat);
+          conn.nation = cNat;
+          conn.ally = sanitizeNation(msg.ally);
           ws.send(JSON.stringify({ t: 'room', code, seat: 0 }));
           break;
         }
@@ -238,12 +310,15 @@ wss.on('connection', (ws) => {
           if (!room) { ws.send(JSON.stringify({ t: 'error', error: '未找到房间：' + code })); break; }
           if (room.players[1]) { ws.send(JSON.stringify({ t: 'error', error: '房间已满' })); break; }
           if (room.started) { ws.send(JSON.stringify({ t: 'error', error: '对局已开始' })); break; }
+          const jNat = sanitizeNation(msg.nation);
+          const jDeck = msg.deck ? sanitizeDeck(msg.deck) : { ok: true, deck: null };
+          if (msg.deck && !jDeck.ok) { ws.send(JSON.stringify({ t: 'error', error: '卡组非法：' + jDeck.error })); break; }
           room.players[1] = conn;
           conn.room = room; conn.seat = 1;
-          conn.deck = msg.deck || null;
-          conn.hq = msg.hq || null;
-          conn.nation = msg.nation || null;
-          conn.ally = msg.ally || null;
+          conn.deck = jDeck.deck;
+          conn.hq = sanitizeHq(msg.hq, jNat);
+          conn.nation = jNat;
+          conn.ally = sanitizeNation(msg.ally);
           ws.send(JSON.stringify({ t: 'room', code, seat: 1 }));
           broadcast(room, { t: 'opponentJoined', nation: conn.nation }, conn);
           // auto-start when both ready
@@ -254,14 +329,19 @@ wss.on('connection', (ws) => {
           break;
         }
         case 'setDeck': {
-          conn.deck = msg.deck; conn.hq = msg.hq; conn.nation = msg.nation;
+          const sNat = sanitizeNation(msg.nation);
+          const sDeck = sanitizeDeck(msg.deck);
+          if (!sDeck.ok) { ws.send(JSON.stringify({ t: 'error', error: '卡组非法：' + sDeck.error })); break; }
+          conn.deck = sDeck.deck;
+          conn.hq = sanitizeHq(msg.hq, sNat);
+          conn.nation = sNat;
           if (conn.room && conn.room.players[0] && conn.room.players[1] && !conn.room.started) {
             if (conn.room.players[0].deck && conn.room.players[1].deck) startGame(conn.room);
           }
           break;
         }
         case 'action': {
-          if (conn.room) handleAction(conn.room, conn, msg);
+          if (conn.room) { conn.room.lastActive = Date.now(); handleAction(conn.room, conn, msg); }
           break;
         }
         case 'rematch': {
@@ -294,6 +374,26 @@ function leaveRoom(conn) {
   if (!room.players[0] && !room.players[1]) rooms.delete(room.code);
   conn.room = null;
 }
+
+// ---------------- 空闲房间回收 ----------------
+const ROOM_TTL_MS = 10 * 60 * 1000;      // 无人在线且 10 分钟无活动 → 回收
+const ROOM_IDLE_TTL_MS = 60 * 60 * 1000; // 有人在线但 1 小时无操作 → 回收
+const roomGC = setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms) {
+    const occupied = room.players.some(p => p && p.ws.readyState === 1);
+    const idle = now - (room.lastActive || 0);
+    if ((!occupied && idle > ROOM_TTL_MS) || idle > ROOM_IDLE_TTL_MS) {
+      for (const p of room.players) {
+        if (!p) continue;
+        try { p.ws.send(JSON.stringify({ t: 'error', error: '房间已因长时间空闲关闭' })); } catch (e) { /* ignore */ }
+        p.room = null;
+      }
+      rooms.delete(code);
+    }
+  }
+}, 60 * 1000);
+if (roomGC.unref) roomGC.unref();
 
 // ---------------- start ----------------
 server.listen(PORT, '0.0.0.0', () => {

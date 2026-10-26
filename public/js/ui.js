@@ -551,9 +551,16 @@
   }
 
   // ---------------- FLIP（GSAP 位移动画） ----------------
+  /** 动画期间临时启用 will-change（结束即移除，避免卡片常驻合成层） */
+  function animOn(el) { if (el && el.classList) el.classList.add('is-animating'); }
+  function animOff(el) { if (el && el.classList) el.classList.remove('is-animating'); }
+
   function flip(before) {
     const s = SCALE || 1;
     const g = G();
+    if (!g) return;
+    // 阶段一：批量读取新布局（期间不写样式，只触发一次重排）
+    const moves = [];
     for (const [uid, oldR] of before) {
       const el = cardEls.get(uid);
       if (!el || !el.isConnected) continue;
@@ -562,11 +569,16 @@
       const dx = (oldR.left - nr.left) / s;
       const dy = (oldR.top - nr.top) / s;
       if (Math.abs(dx) < 1.5 && Math.abs(dy) < 1.5) continue;
-      if (!g) continue;
+      moves.push([el, dx, dy]);
+    }
+    // 阶段二：批量写动画
+    for (const [el, dx, dy] of moves) {
       // gsap 会把当前 transform（扇形旋转等）解析为分量，x/y 只叠加位移
+      animOn(el);
       gsap.fromTo(el, { x: dx, y: dy }, {
         x: 0, y: 0, duration: 0.34, ease: 'power3.out',
         overwrite: 'auto', clearProps: 'x,y',
+        onComplete: () => animOff(el),
       });
     }
   }
@@ -1231,7 +1243,7 @@
       startDrag(e);
     }
     positionGhost(e.clientX, e.clientY);
-    updateDropHover(e.clientX, e.clientY);
+    scheduleHover(e.clientX, e.clientY);
   }
 
   function canDrag(d) {
@@ -1267,17 +1279,18 @@
 
     const ghost = drag.el.cloneNode(true);
     ghost.id = 'drag-ghost';
-    ghost.style.left = (e.clientX - drag.offX) + 'px';
-    ghost.style.top = (e.clientY - drag.offY) + 'px';
+    // 用 translate3d 定位（合成层内位移，不触发 layout）
+    drag.gx = e.clientX - drag.offX;
+    drag.gy = e.clientY - drag.offY;
     ghost.style.width = r.width + 'px';
     ghost.style.height = r.height + 'px';
-    // 对齐原版拖拽：卡牌放大到约 1.4 倍跟随指针（实测录像 31.5s 段）
     ghost.style.position = 'fixed';
-    ghost.style.transform = 'rotate(2deg) scale(1.38)';
+    ghost.style.transform = `translate3d(${drag.gx}px, ${drag.gy}px, 0) rotate(2deg) scale(1.38)`;
     if (window.gsap) {
       gsap.fromTo(ghost, { scale: 1.04, rotation: 1 },
         { scale: 1.38, rotation: 2, duration: 0.09, ease: 'power2.out' });
     }
+    ghost._ghostBase = 'rotate(2deg) scale(1.38)';
     document.body.appendChild(ghost);
     drag.ghost = ghost;
     drag.el.classList.add('dragging-src');
@@ -1322,14 +1335,35 @@
 
   function positionGhost(x, y) {
     if (!drag || !drag.ghost) return;
-    drag.ghost.style.left = (x - drag.offX) + 'px';
-    drag.ghost.style.top = (y - drag.offY) + 'px';
+    drag.gx = x - drag.offX;
+    drag.gy = y - drag.offY;
+    // 直接写 transform（合成层位移），避免 left/top 每帧触发重排
+    drag.ghost.style.transform =
+      `translate3d(${drag.gx}px, ${drag.gy}px, 0) rotate(2deg) scale(1.38)`;
   }
 
+  // 落点高亮：rAF 节流 + 目标未变则跳过（elementFromPoint 会强制重排）
+  let hoverRaf = 0, hoverX = 0, hoverY = 0, lastHoverEl = null;
+  function scheduleHover(x, y) {
+    hoverX = x; hoverY = y;
+    if (hoverRaf) return;
+    hoverRaf = requestAnimationFrame(() => {
+      hoverRaf = 0;
+      updateDropHover(hoverX, hoverY);
+    });
+  }
   function updateDropHover(x, y) {
-    document.querySelectorAll('.drop-hover').forEach(s => s.classList.remove('drop-hover'));
     const t = dropTargetAt(x, y);
-    if (t && t.slot) t.slot.classList.add('drop-hover');
+    const el = (t && t.slot) ? t.slot : null;
+    if (el === lastHoverEl) return;      // 目标没变，不做任何 DOM 写入
+    if (lastHoverEl && lastHoverEl.classList) lastHoverEl.classList.remove('drop-hover');
+    if (el && el.classList) el.classList.add('drop-hover');
+    lastHoverEl = el;
+  }
+  function clearDropHover() {
+    if (lastHoverEl && lastHoverEl.classList) lastHoverEl.classList.remove('drop-hover');
+    lastHoverEl = null;
+    if (hoverRaf) { cancelAnimationFrame(hoverRaf); hoverRaf = 0; }
   }
 
   function dropTargetAt(x, y) {
@@ -1437,6 +1471,7 @@
     }
     if (drag && drag.ghost && drag.ghost.parentNode) drag.ghost.parentNode.removeChild(drag.ghost);
     if (drag && drag.el) drag.el.classList.remove('dragging-src');
+    clearDropHover();
     document.querySelectorAll('.drop-ok,.drop-hover').forEach(s => s.classList.remove('drop-ok', 'drop-hover'));
     document.querySelectorAll('.targetable').forEach(s => s.classList.remove('targetable'));
     window.removeEventListener('pointermove', onPointerMove);

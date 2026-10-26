@@ -3693,7 +3693,8 @@
           kredits: this.players[i].kredits,
           slots: this.players[i].slots,
           fatigue: this.players[i].fatigue,
-          hand: this.players[i].hand.map(c => cardView(c, i === side)),
+          // 只给本座位下发真实手牌；对手只手牌数量（防止抓包读到敌方手牌）
+          hand: i === side ? this.players[i].hand.map(c => cardView(c, true)) : [],
           handCount: this.players[i].hand.length,
           deckCount: this.players[i].deck.length,
           board: this.players[i].board.map(c => cardView(c, false)),
