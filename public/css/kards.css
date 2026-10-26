@@ -656,6 +656,28 @@ html, body {
   -webkit-mask-image: radial-gradient(circle, #000 52%, transparent 70%);
   mask-image: radial-gradient(circle, #000 52%, transparent 70%);
 }
+/* 实时攻防数值：覆盖卡图上印刷的固定数值（位置按卡图实测：攻 27% / 防 73%） */
+.card .stat {
+  position: absolute; top: 62.5%;
+  transform: translateX(-50%);
+  min-width: 25px; height: 25px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center;
+  font: 800 16px/1 inherit;
+  font-variant-numeric: tabular-nums;
+  color: #f4eeda;
+  background: #241d14;
+  border-radius: 46% 46% 44% 44% / 52% 52% 48% 48%;
+  border: 1px solid rgba(0,0,0,.65);
+  box-shadow: 0 1px 2px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,240,200,.12);
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none; z-index: 4;
+}
+.card .stat.atk { left: 27%; }
+.card .stat.def { left: 73%; }
+.card .stat.up { color: #93e88b; }
+.card .stat.down { color: #ff9070; }
+.card .stat.hidden { display: none; }
+
 /* 老兵化能量漩涡（对齐原版：蓝白流光绕卡旋转 + 卡面变亮换装） */
 .veteran-swirl {
   position: absolute; width: 200px; height: 200px;

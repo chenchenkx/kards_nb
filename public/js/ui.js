@@ -131,6 +131,16 @@
     nameTag.className = 'card-nametag';
     el.appendChild(nameTag);
 
+    // 实时攻防数值（覆盖卡图印刷值；位置对齐卡图：攻 27% / 防 73%）
+    const atkStat = document.createElement('div');
+    atkStat.className = 'stat atk hidden';
+    el.appendChild(atkStat);
+    const defStat = document.createElement('div');
+    defStat.className = 'stat def hidden';
+    el.appendChild(defStat);
+    el._atkStat = atkStat;
+    el._defStat = defStat;
+
     // 统一事件（读取实时状态，避免闭包过期）
     el.addEventListener('mouseenter', (e) => {
       if (drag && drag.active) return;
@@ -167,6 +177,28 @@
       } else {
         img.style.filter = '';
         el.classList.remove('damaged');
+      }
+    }
+
+    // 实时攻防数值（盖住卡图印刷值）：受伤变红、加成变绿
+    if (el._atkStat && el._defStat) {
+      const isUnit = ['infantry', 'tank', 'artillery', 'fighter', 'bomber'].includes(view.type);
+      const atkNow = view.totalAttack != null ? view.totalAttack : view.attack;
+      const defNow = view.totalDefense != null ? view.totalDefense : view.defense;
+      const atkBase = typeof view.attack === 'number' ? view.attack : atkNow;
+      const defBase = typeof view.maxDef === 'number' ? view.maxDef : (typeof view.defense === 'number' ? view.defense : defNow);
+      if (isUnit) {
+        el._atkStat.classList.remove('hidden');
+        el._defStat.classList.remove('hidden');
+        el._atkStat.textContent = atkNow != null ? atkNow : '';
+        el._defStat.textContent = defNow != null ? defNow : '';
+        el._atkStat.classList.toggle('up', (atkNow || 0) > (atkBase || 0));
+        el._atkStat.classList.toggle('down', (atkNow || 0) < (atkBase || 0));
+        el._defStat.classList.toggle('up', (defNow || 0) > defBase);
+        el._defStat.classList.toggle('down', (defNow || 0) < defBase);
+      } else {
+        el._atkStat.classList.add('hidden');
+        el._defStat.classList.add('hidden');
       }
     }
 
