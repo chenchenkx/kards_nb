@@ -5519,7 +5519,10 @@
           };
           if (op.self && src.isUnit) applyTo(src);
           else {
-            const t = pickUnit('friendlyUnit') || (src.isUnit ? src : null);
+            // 优先玩家指定的目标（"Reduce the operation cost of target unit to 0"）
+            const chosen = (ctx && this.find(ctx.target)) || null;
+            const t = (chosen && chosen.isUnit && chosen.uid !== src.uid) ? chosen
+              : (pickUnit('friendlyUnit') || (src.isUnit ? src : null));
             if (t) applyTo(t);
           }
           this.log('单位行动费用已修正');
@@ -5738,9 +5741,11 @@
     findByName(name, side) {
       const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
       // "GARRISON unit" / "GLADIATOR" / "1/1 LIGHT INFANTRY" 这类被类型词或身材前缀污染的名字
-      const cleaned = String(name || '')
+      const raw0 = String(name || '').trim();
+      const hadStats = /^\d+\s*\/\s*\d+\s+/.test(raw0);
+      const cleaned = raw0
         .replace(/^\d+\s*\/\s*\d+\s+/, '')
-        .replace(/\s+(unit|card|fighters?|bombers?|tanks?|infantry|artillery|orders?)$/i, '')
+        .replace(hadStats ? /^$/ : /\s+(unit|card|fighters?|bombers?|tanks?|infantry|artillery|orders?)$/i, '')
         .trim();
       if (cleaned && cleaned !== name) {
         const hit = this.findByName(cleaned, side);

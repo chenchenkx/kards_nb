@@ -54,6 +54,11 @@ function mkGame(opts = {}) {
   ally.loc = 'board'; ally.slot = 0; ally.summonedTurn = 0;
   ally.keywords.delete('guard');
   g.players[0].board.push(ally);
+  if (opts.allyFront) {
+    const f = new Engine.CardInst(FILL[2], 0, g);
+    f.loc = 'front'; f.summonedTurn = 0;
+    g.frontline.push(f); if (g.frontlineOwner === -1) g.frontlineOwner = 0;
+  }
   if (opts.allyTank) {
     const tankDef = db.cards.find(c => c.type === 'tank' && !(c.text || '').trim() && (c.cost || 0) <= 3) || FILL[2];
     const t = new Engine.CardInst(tankDef, 0, g);
@@ -85,7 +90,7 @@ function snap(g) {
          u._noHQAttack ? 1 : 0, u._noAttack ? 1 : 0, u._pinImmune ? 1 : 0, u._ignoreArmor ? 1 : 0,
          u._dmgTakenTo == null ? '' : u._dmgTakenTo, u._dmgTakenMult || 1, u._splashAdjacent || 0,
          u._destroyTanksOnDamage ? 1 : 0, u._pinOnDamageAdj ? 1 : 0, u._pinAirOnCombat ? 1 : 0,
-         u._excessToHq ? 1 : 0, u._splashHq ? 1 : 0, u._salvage ? 1 : 0].join('/'),
+         u._excessToHq ? 1 : 0, u._splashHq ? 1 : 0, u._salvage ? 1 : 0, u.heavyArmor || 0].join('/'),
         u._pinned ? 'P' : '', u._suppressed ? 'S' : '', u.effOpCost, u.loc].join(','));
     }
   }
@@ -121,7 +126,7 @@ function delta(a, b) {
 function runPair(def, cl, cfg) {
   const runOne = (d) => {
     const env = cfg.env || {};
-    const { g, foe, foeAir, foeFront } = mkGame({ deckMix: true, air: cfg.target === 'air' || env.air, front: cfg.front, allyTank: env.allyTank, manyAllies: env.manyAllies, foeBlitz: env.foeBlitz, hqLow: env.hqLow, hqHigh: env.hqHigh });
+    const { g, foe, foeAir, foeFront } = mkGame({ deckMix: true, air: cfg.target === 'air' || env.air, front: cfg.front, allyTank: env.allyTank, allyFront: env.allyFront, manyAllies: env.manyAllies, foeBlitz: env.foeBlitz, hqLow: env.hqLow, hqHigh: env.hqHigh });
     const s = new Engine.CardInst(d, 0, g);
     let before;
     try {
@@ -138,7 +143,8 @@ function runPair(def, cl, cfg) {
         });
         if (!r || !r.ok) return 'ERR:playCard';
       } else if (cl.kind === 'destruction') {
-        s.loc = 'board'; s.slot = 1; s.summonedTurn = 0; g.players[0].board.push(s);
+        s.loc = 'front'; s.slot = 1; s.summonedTurn = 0;
+        g.frontline.push(s); g.frontlineOwner = 0;
         before = snap(g);
         g.destroyCard(s, null);
       } else if (cl.kind === 'trigger') {
@@ -147,7 +153,9 @@ function runPair(def, cl, cfg) {
         const payload = { uid: s.uid, owner: 0, type: s.type, nation: s.nation, attack: s.totalAttack, card: s, amount: 2, side: 0 };
         g.fireTrigger(cl.event, payload, u => u.uid === s.uid);
       } else if (cl.kind === 'pincer') {
-        const c1 = new Engine.CardInst(FILL[2], 0, g);
+        const pincerFiller = db.cards.find(x => x.has && x.has('pincer') && x.id !== def.id)
+          || db.cards.find(x => (x.keywords || []).includes('pincer')) || FILL[2];
+        const c1 = new Engine.CardInst(pincerFiller, 0, g);
         c1.loc = 'hand'; g.players[0].hand.push(c1);
         g.playCard(0, g.players[0].hand.indexOf(c1), {});
         s.loc = 'hand'; g.players[0].hand.push(s);
@@ -193,6 +201,7 @@ function probe(def, cl) {
     { foeBlitz: true },              // 敌方有闪击单位
     { hqLow: true },                 // 己方总部残血
     { hqHigh: true, allyTank: true },// 己方总部高防
+    { allyFront: true },             // 己方有前线单位（"前排友军 +X"）
   ];
   const cfgs = [];
   const targetsFor = (front) => [
