@@ -20,11 +20,15 @@ const num = (s, re) => { const m = re.exec(s); return m ? +m[1] : null; };
 const issues = {};
 const add = (k, id, msg) => { (issues[k] = issues[k] || []).push([id, msg]); };
 
+const SPECIAL = (Engine.SPECIAL_ORDER_IDS || new Set());
 const ORDERS = cards.filter(c => c.type === 'order');
+let specialCount = 0;
 
 for (const c of ORDERS) {
   const text = (c.text || '').trim();
   if (!text) continue;
+  // 由 _runSpecialOrder 专门实现的卡：效果不由文本解析产出，单独计数
+  if (SPECIAL.has(c.id)) { specialCount++; continue; }
   const tl = text.toLowerCase();
   const clauses = Engine.parseClauses(text);
   const ops = allOps(clauses.reduce((a, cl) => a.concat(cl.ops || []), []));
@@ -105,7 +109,7 @@ const order = ['解析为空', '二选一有空分支', '文本有伤害但未�
 let total = 0;
 for (const k of order) total += (issues[k] || []).length;
 
-let out = `# 指令牌语义审计（${ORDERS.length} 张，问题 ${total} 处）\n`;
+let out = `# 指令牌语义审计（${ORDERS.length} 张，问题 ${total} 处，另有 ${specialCount} 张由专门代码实现）\n`;
 for (const k of order) {
   const list = issues[k] || [];
   if (!list.length) continue;
@@ -113,6 +117,6 @@ for (const k of order) {
   for (const [id, msg] of list) out += `- \`${id}\` — ${msg}\n`;
 }
 fs.writeFileSync(path.join(__dirname, '..', '.work', 'order_semantic.md'), out, 'utf8');
-console.log(`指令 ${ORDERS.length} 张，问题 ${total} 处`);
+console.log(`指令 ${ORDERS.length} 张，问题 ${total} 处，专门实现 ${specialCount} 张`);
 for (const k of order) if ((issues[k] || []).length) console.log(`  ${k}: ${issues[k].length}`);
 console.log('-> .work/order_semantic.md');

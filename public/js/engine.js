@@ -132,6 +132,11 @@
   }
 
   function parseClauses(text) {
+    // "Choose a unit in hand. Swap it..." / "Choose and discard a unit. Give its..." 这类
+    // 被句号切断的选择句，先合回一句再解析（否则只会命中前半句）
+    text = String(text || '').replace(
+      /(\bchoose[^.]*?)\.\s+(?=(?:give|swap|reduce|draw|gain|copy|convert|trigger|remove)\b)/gi,
+      '$1, ');
     const clauses = [];
     let prevCond = null;      // 上一句已识别的条件，供 "if not." 反指
     for (const sent of splitSentences(text)) {
@@ -496,6 +501,20 @@
   function parseOpsRaw(s, orig) {
     const ops = [];
     const t = String(s || '').replace(/[\u2019\u2018]/g, "'").trim();
+    // ---- 手牌交互（选择手牌 → 弃/降费/复制/换场） ----
+    let hx;
+    hx = /choose a (us|american|german|soviet|british|japanese|french|italian|polish|finnish) unit in hand[.,]?\s*reduce its cost by its operation cost/i.exec(t);
+    if (hx) { ops.push({ op: 'discountHandUnit', nation: /us|american/i.test(hx[1]) ? 'USA' : null }); return ops; }
+    hx = /choose and discard a (unit|card)[.,]?\s*give its attack and defense to (?:target |a )?(?:friendly )?(infantry|tank)?/i.exec(t);
+    if (hx) { ops.push({ op: 'discardToBuff', type: hx[2] ? hx[2].toLowerCase() : null }); return ops; }
+    hx = /choose and discard a card to draw a card with higher cost/i.exec(t);
+    if (hx) { ops.push({ op: 'discardDrawHigher' }); return ops; }
+    hx = /choose and discard a unit to draw a card\.?\s*gain (\d+) kredits if the unit was salvage[a-z]*/i.exec(t);
+    if (hx) { ops.push({ op: 'discardDrawKredits', n: +hx[1] }); return ops; }
+    hx = /choose 1 of 3 cards in the enemy hand[.,]?\s*copy it/i.exec(t);
+    if (hx) { ops.push({ op: 'copyEnemyHandCard' }); return ops; }
+    if (/choose a unit in hand[.,]?\s*swap it with a friendly unit on the battlefield/i.test(t)) { ops.push({ op: 'swapHandBoard' }); return ops; }
+
     const origT = String(orig || s || t).replace(/[\u2019\u2018]/g, "'");
 
     // "Deal N damage to ..." (several target forms)
@@ -1904,7 +1923,8 @@
     // ---------- turn flow ----------
     beginTurn() {
       const p = this.players[this.current];
-      p.slots = Math.min(RULES.MAX_KREDITS, p.slots + 1);
+      if (p._noSlotTurns > 0) { p._noSlotTurns--; } else p.slots = Math.min(RULES.MAX_KREDITS, p.slots + 1);
+      if (p._drawOnTurn4 && this.turn >= 3) { p._drawOnTurn4 = false; this.draw(this.current, 1, true); }
       p.kredits = p.slots;
       p.ordersPlayedThisTurn = 0;
       p.playedThisTurn = 0;
@@ -2138,10 +2158,13 @@
         }
       }
       c.defense -= amount;
+      if (killer && killer._dmgAddsDefense && killer.isUnit) killer.buffDefense += amount;
       this.ev({ e: 'damage', uid: c.uid, amount });
       this.log(`${c.name} 受到 ${amount} 点伤害，剩余 ${Math.max(0, c.defense)}`);
       // "When this unit is dealt damage…"
       this.fireTrigger('selfDamaged', { uid: c.uid, amount }, u => u.uid === c.uid);
+      // "when another of your units is attacked"（ECHELON）
+      this.fireTrigger('allyAttacked', { uid: c.uid, owner: c.owner, card: c }, u => u.owner === c.owner && u.uid !== c.uid);
       // "When this unit deals damage to a unit…"（LONG RANGE DESERT GROUP 授予的亡语：摧毁）
       if (killer && killer.isUnit && c.isUnit && killer.uid !== c.uid) {
         this.fireTrigger('selfDamageUnit', { uid: killer.uid, targetUid: c.uid, card: killer }, u => u.uid === killer.uid);
@@ -2161,9 +2184,12 @@
       const wasFront = c.loc === 'front';
       // destruction trigger effects
       const clauses = c._parsed || (c._parsed = parseClauses(c.text));
-      for (const cl of clauses) {
-        if (cl.kind !== 'destruction') continue;
-        this.execOps(cl.ops, c, { killer });
+      const destTimes = c._destructionTwice ? 2 : 1;
+      for (let di = 0; di < destTimes; di++) {
+        for (const cl of clauses) {
+          if (cl.kind !== 'destruction') continue;
+          this.execOps(cl.ops, c, { killer });
+        }
       }
       // 被授予的亡计能力（"Your units get: "Destruction: ...""）
       for (const g of (c._granted || [])) {
@@ -2329,6 +2355,15 @@
       p.playedThisTurn = (p.playedThisTurn || 0) + 1;
       if (p.playedThisTurn >= 2) this.execCardText(c, 'pincer', ctx);
       this.applyAuras();
+      // 部署光环（COMMITTED CREW / CONTEST DOCTRINE）与"部署抽牌"（FEIGNED RETREAT）
+      if (c.isUnit) {
+        for (const sideBuf of [p._deployBuff]) {
+          if (sideBuf && sideBuf.test && sideBuf.test(c.name, c)) {
+            if (sideBuf.until == null || sideBuf.until >= this.turn) { c.buffAttack += sideBuf.a; c.buffDefense += sideBuf.d; }
+          }
+        }
+        if (p._drawOnDeploy) { for (let k = 0; k < p._drawOnDeploy; k++) this.draw(side, 1, true); }
+      }
       // 触发器：己方出牌 / 部署守护单位 / 直落前线 / 敌方视角的部署事件
       this.fireTrigger('ownCardPlayed', { owner: side, nation: c.nation }, u => u.owner === side && u.uid !== c.uid);
       this.fireTrigger('enemyDeploy', { owner: side, uid: c.uid }, u => u.owner !== side);
@@ -2796,7 +2831,200 @@
      *   - 立即执行 trigger 子句（"When you play this…" 类对指令而言就是立即结算；
      *     需要外部事件的触发对已进弃牌堆的指令没有意义，跳过）
      */
+    /**
+     * 特殊指令表：通用文本解析兜不住的机制（光环/换场/连锁/条件授予）。
+     * 每项在 execOrderText 末尾执行，键为卡牌 id。
+     */
+    _runSpecialOrder(c, ctx, me, foe) {
+      const p = this.players[me], ep = this.players[foe];
+      const key = c.id.replace(/^card_event_/, '');
+      const S = this._specials || (this._specials = {
+        committed_crew() {
+          for (const h of [...p.hand, ...p.deck]) if (/SPITFIRE/i.test(h.name)) h._costMod = -(h.cost || 0);
+          p._deployBuff = { test: (n) => /SPITFIRE/i.test(n), a: 3, d: 3, until: this.turn, side: me };
+          this.log('本回合喷火式部署费为 0，且部署时 +3+3');
+        },
+        echelon() {
+          for (const u of this.unitsOf(me)) {
+            (u._granted = u._granted || []).push({ kind: 'trigger', event: 'allyAttacked', ops: [{ op: 'buff', a: 1, d: 1, target: 'allFriendlyUnits' }] });
+          }
+          this.log('我方单位获得：友军被攻击时 +1+1');
+        },
+        infiltrate() {
+          const known = ep.hand.length;
+          for (const u of this.unitsOf(me).filter(x => /commando/i.test(x.name))) {
+            for (let i = 0; i < known; i++) {
+              const list = this.unitsOf(foe).filter(x => x.defense > 0);
+              if (!list.length) break;
+              this.damageCard(this.rng.pick(list), 1, u);
+            }
+          }
+          this.log(`渗透：每支突击队按已知敌牌（${known}）造成伤害`);
+        },
+        contest_doctrine() {
+          this.execOp({ op: 'develop', nation: 'Germany', kind: 'tank' }, c, ctx);
+          p._deployBuff = { test: (n, card) => card && card.type === 'tank', a: 1, d: 1, until: 999, side: me };
+          this.log('本局部署的坦克 +1+1');
+        },
+        front_and_homeland() {
+          p._drawOnTurn4 = true;
+          for (const h of p.deck) if (h.nation === 'Germany' && (h.cost || 0) % 2 === 1) h._costMod = (h._costMod || 0) - 1;
+          this.log('第 4 回合抽牌；德国奇数费卡费用 -1');
+        },
+        air_escort() {
+          for (const u of this.unitsOf(me)) {
+            const cls = u._parsed || (u._parsed = parseClauses(u.text));
+            for (const cl of cls) {
+              if (cl.kind !== 'deployment') continue;
+              if (cl.ops.some(o => o.target === 'unit' || o.target === 'enemyUnit')) continue;
+              this.execOps(cl.ops, u, { trigger: true });
+            }
+          }
+          this.log('触发我方单位的非指向部署效果');
+        },
+        japan_duty() {
+          for (const u of this.unitsOf(me)) u._destructionTwice = true;
+          this.log('我方单位的亡计效果触发两次');
+        },
+        feigned_retreat() {
+          const back = p.hand.splice(0, p.hand.length);
+          for (const d of back) { d.loc = 'discard'; p.discard.push(d); }
+          p._drawOnDeploy = (p._drawOnDeploy || 0) + 1;
+          this.log(`弃掉 ${back.length} 张手牌；本局部署单位时抽一张`);
+        },
+        persian_corridor() {
+          const t = this.unitsOf(me).find(u => u.nation === 'Britain' || u.nation === 'USA') || this.unitsOf(me)[0];
+          if (t) (t._granted = t._granted || []).push({ kind: 'destruction', ops: [{ op: 'triggerAllDestruction' }] });
+          this.log('授予：亡计时触发我方所有亡计');
+        },
+        victory_banners() {
+          const t = this.find(ctx && ctx.target) || this.unitsOf(foe)[0];
+          if (!t) return;
+          for (const u of this.unitsOf(t.owner)) {
+            const nc = new CardInst(t.def, u.owner, this);
+            nc.uid = u.uid; nc.loc = u.loc; nc.slot = u.slot; nc.summonedTurn = u.summonedTurn;
+            nc.defense = u.defense; nc.buffAttack = u.buffAttack; nc.buffDefense = u.buffDefense;
+            if (u.loc === 'front') { const i = this.frontline.indexOf(u); if (i >= 0) this.frontline[i] = nc; }
+            else { const b = this.players[u.owner].board; const i = b.indexOf(u); if (i >= 0) b[i] = nc; }
+          }
+          this.log(`战场上 ${t.owner === me ? '我方' : '敌方'}全部单位变为 ${t.name}`);
+        },
+        fortunes_of_war() {
+          const t = this.find(ctx && ctx.target) || this.unitsOf(foe)[0];
+          if (!t) return;
+          const cls = t._parsed || (t._parsed = parseClauses(t.text));
+          for (const cl of cls) if (cl.kind === 'destruction') this.execOps(cl.ops, t, { killer: c });
+          this.destroyCard(t, c);
+          this.log(`${t.name} 的亡计被触发后移除`);
+        },
+        grim_day() {
+          for (const u of this.unitsOf(me)) u._enemyTax = (u._enemyTax || 0) + 2;
+          this.log('敌方攻击/指定我方单位需额外 2 指挥点');
+        },
+        yank_the_army_weekly() {
+          p._developExtra = p._developExtra || 'RETRIBUTION';
+          this.log('本局每回合首次 Develop 时额外 Develop 一张 RETRIBUTION');
+        },
+        colossus() { this.execOp({ op: 'copyEnemyDeck', n: 3, onlyOrders: true }, c, ctx); },
+        seac() {
+          this.draw(me, 1, true);
+          const last = p.hand[p.hand.length - 1];
+          if (last) { const cp = new CardInst(last.def, me, this); cp.loc = 'hand'; p.hand.push(cp); this.log(`抽到并复制 ${last.name}`); }
+        },
+        scrap_metal() {
+          const d = p.hand.find(x => x.isUnit) || p.hand[0];
+          if (!d) return;
+          p.hand.splice(p.hand.indexOf(d), 1); d.loc = 'discard'; p.discard.push(d);
+          this.draw(me, 1, true);
+          if (d.has && d.has('salvage')) { p.kredits = Math.min(RULES.MAX_SLOTS, p.kredits + 4); this.log('打捞：+4 指挥点'); }
+          this.log(`弃掉 ${d.name}，抽一张`);
+        },
+        admiral_hipper() {
+          const t = this.find(ctx && ctx.target) || this.unitsOf(foe)[0];
+          if (t) {
+            if (t.loc === 'front') { this.frontline.splice(this.frontline.indexOf(t), 1); if (!this.frontline.length) this.frontlineOwner = -1; }
+            else { const b = this.players[t.owner].board; const i = b.indexOf(t); if (i >= 0) b.splice(i, 1); }
+            t.loc = 'hand'; this.players[t.owner].hand.push(t);
+          }
+          ep._noDrawTurns = (ep._noDrawTurns || 0) + 1;
+          ep._noSlotTurns = (ep._noSlotTurns || 0) + 1;
+          this.log('单位送回手牌；敌方下回合不涨槽也不抽牌');
+        },
+        run_the_battlefield() {
+          for (const u of this.unitsOf(me)) {
+            if (u.totalAttack < 4) continue;
+            p.kredits = Math.min(RULES.MAX_SLOTS, p.kredits + 3);
+            u.buffAttack += 1; u.buffDefense += 1;
+          }
+          this.log('每个 4+ 攻击单位：+3 指挥点并 +1+1');
+        },
+        rm_bersaglieri() {
+          this.draw(me, 1, true);
+          const last = p.hand[p.hand.length - 1];
+          const n = last ? (last.effCost || 0) : 0;
+          if (n) { p.hqMaxDef += n; p.hqDef += n; this.log(`HQ 防御 +${n}`); }
+        },
+        grand_plans() {
+          const d = this.rng.pick(p.hand);
+          if (!d) return;
+          p.hand.splice(p.hand.indexOf(d), 1); d.loc = 'discard'; p.discard.push(d);
+          const idx = p.deck.findIndex(x => (x.cost || 0) > (d.cost || 0));
+          if (idx >= 0) { const x = p.deck.splice(idx, 1)[0]; x.loc = 'hand'; p.hand.push(x); this.log(`弃 ${d.name}，抽 ${x.name}`); }
+          else this.log(`弃 ${d.name}，牌库无更高费卡`);
+        },
+        reorganize() {
+          const d = this.rng.pick(p.hand);
+          if (d) { p.hand.splice(p.hand.indexOf(d), 1); d.loc = 'deck'; p.deck.push(d); this.log(`${d.name} 洗回牌库`); }
+          this.draw(me, 1, true);
+        },
+        special_attack() {
+          p.slots = Math.max(1, p.slots - 1);
+          for (const u of this.unitsOf(me)) (u._granted = u._granted || []).push({ kind: 'destruction', ops: [{ op: 'damage', n: 1, target: 'enemyHQ' }] });
+          this.log('失去 1 个指挥点槽；我方单位获得亡计：对敌 HQ 造成 1 点伤害');
+        },
+        strong_bond() {
+          const t = this.unitsOf(me).find(u => u.loc === 'board') || this.unitsOf(me)[0];
+          if (t) {
+            t.keywords.add('guard');
+            (t._granted = t._granted || []).push({ kind: 'trigger', event: 'startOfTurn', ops: [{ op: 'spawn', name: 'US 3-COST UNIT', loc: 'board' }] });
+            const def = this.db.deckPool.find(x => x.nation === 'USA' && (x.cost || 0) === 3 && x.isUnit);
+            if (def) {
+              t._granted[t._granted.length - 1].ops = [{ op: 'spawnDef', defId: def.id, loc: 'board' }];
+            }
+          }
+          this.log('地面单位获得守护与每回合增援');
+        },
+        eastern_front() {
+          for (const u of this.unitsOf(me)) if (u.has('alpine')) { u.buffAttack += 1; u.buffDefense += 1; }
+          const idx = p.deck.findIndex(x => x.has && x.has('alpine'));
+          if (idx >= 0) { const x = p.deck.splice(idx, 1)[0]; x.loc = 'hand'; p.hand.push(x); this.log(`抽到 ${x.name}`); }
+          this.log('山地单位 +1+1');
+        },
+        vanguard_ita() {
+          const t = this.unitsOf(me).find(u => u.has('alpine'));
+          if (t) { t.keywords.add('blitz'); t._dmgAddsDefense = true; this.log(`${t.name} 获得闪击与伤害加成`); }
+        },
+        rule_the_skies() {
+          if (ep.hqDamagedThisTurn >= 3) {
+            for (const u of this.unitsOf(me)) if (u.type === 'fighter' || u.type === 'bomber') { u.buffAttack += 1; u.buffDefense += 1; }
+            this.log('敌方 HQ 本回合已受 3+ 伤害：我方空军 +1+1');
+          } else this.log('条件未满足（敌方 HQ 本回合伤害不足 3）');
+        },
+        ats() {
+          if (ep.hqDamagedThisTurn >= 3) { this.draw(me, 1, true); this.log('条件满足：抽一张'); }
+          else this.log('条件未满足（敌方 HQ 本回合伤害不足 3）');
+        },
+      });
+      const fn = S[key];
+      if (!fn) return false;
+      try { fn.call(this); } catch (e) { this.log(`特殊结算失败（${c.name}）：${e.message}`); }
+      return true;
+    }
+
     execOrderText(c, ctx) {
+      // 特殊指令表优先（这些卡需要光环/换场/连锁，通用解析兜不住）
+      const meS = c.owner, foeS = 1 - c.owner;
+      if (this._runSpecialOrder(c, ctx || {}, meS, foeS)) return;
       const clauses = c._parsed || (c._parsed = parseClauses(c.text));
       for (const cl of clauses) {
         if (cl.kind === 'destruction' || cl.kind === 'deployment') continue;
@@ -3075,6 +3303,104 @@
             if (idx >= 0) { p.deck.splice(idx, 1); p.deck.unshift(pick); }
           }
           this.log(`${op.n} 张牌移至牌库顶`);
+          break;
+        }
+        case 'discountHandUnit': {
+          // "Choose a US unit in hand. Reduce its cost by its operation cost."（WOMEN AT WORK）
+          const p = this.players[me];
+          const cands = p.hand.filter(c => (!op.nation || c.nation === op.nation) && c.isUnit);
+          const t = cands.length ? this.rng.pick(cands) : null;
+          if (t) { t._costMod = (t._costMod || 0) - (t.opCost || 0); this.log(`${t.name} 部署费用 -${t.opCost || 0}（当前 ${t.effCost}）`); }
+          break;
+        }
+        case 'discardToBuff': {
+          // "Choose and discard a unit. Give its attack and defense to target friendly infantry/tank."（OVERWHELMING FORCE）
+          const p = this.players[me];
+          const cands = p.hand.filter(c => c.isUnit || c.type === 'order');
+          const d = cands.length ? this.rng.pick(cands) : null;
+          const t = pickUnit('friendlyUnit');
+          if (d && t && t.isUnit) {
+            const a = (d.attack || 0) + (d.buffAttack || 0), dfn = (d.defense || 0) + (d.buffDefense || 0);
+            t.buffAttack += a; t.buffDefense += dfn;
+            p.hand.splice(p.hand.indexOf(d), 1);
+            d.loc = 'discard'; p.discard.push(d);
+            this.log(`弃掉 ${d.name}，${t.name} 获得 +${a}/+${dfn}`);
+          }
+          break;
+        }
+        case 'discardDrawHigher': {
+          // "Choose and discard a card to draw a card with higher cost from your deck."（GRAND PLANS）
+          const p = this.players[me];
+          if (!p.hand.length) break;
+          const d = this.rng.pick(p.hand);
+          p.hand.splice(p.hand.indexOf(d), 1); d.loc = 'discard'; p.discard.push(d);
+          const idx = p.deck.findIndex(c => (c.cost || 0) > (d.cost || 0));
+          if (idx >= 0) {
+            const c = p.deck.splice(idx, 1)[0];
+            c.loc = 'hand'; p.hand.push(c);
+            this.log(`弃掉 ${d.name}，抽到更高费用的 ${c.name}`);
+          } else this.log(`弃掉 ${d.name}，牌库没有更高费用的卡`);
+          break;
+        }
+        case 'discardDrawKredits': {
+          // "Choose and discard a unit to draw a card. Gain 4 kredits if the unit was Salvage."（SCRAP METAL）
+          const p = this.players[me];
+          const d = p.hand.find(c => c.isUnit) || p.hand[0];
+          if (!d) break;
+          p.hand.splice(p.hand.indexOf(d), 1); d.loc = 'discard'; p.discard.push(d);
+          this.draw(me, 1, true);
+          if (d.has && d.has('salvage')) {
+            p.kredits = Math.min(RULES.MAX_SLOTS, p.kredits + (op.n || 4));
+            this.log(`弃掉 ${d.name}（打捞），获得 ${op.n || 4} 指挥点`);
+          } else this.log(`弃掉 ${d.name}，抽一张`);
+          break;
+        }
+        case 'copyEnemyHandCard': {
+          // "Choose 1 of 3 cards in the enemy hand. Copy it."（HAPPY TIME）
+          const p = this.players[me], ep = this.players[foe];
+          if (!ep.hand.length) break;
+          const src = this.rng.pick(ep.hand);
+          const copy = new CardInst(src.def, me, this);
+          copy.loc = 'hand';
+          p.hand.push(copy);
+          this.log(`复制了敌方手牌 ${src.name}`);
+          break;
+        }
+        case 'swapHandBoard': {
+          // "Choose a unit in hand. Swap it with a friendly unit on the battlefield."（MAYHEM）
+          const p = this.players[me];
+          const handUnit = p.hand.find(c => c.isUnit);
+          const boardUnit = this.unitsOf(me).find(u => u.loc === 'board');
+          if (!handUnit || !boardUnit) break;
+          const slot = boardUnit.slot;
+          p.hand.splice(p.hand.indexOf(handUnit), 1);
+          const b = p.board;
+          const bi = b.indexOf(boardUnit);
+          if (bi >= 0) b.splice(bi, 1);
+          handUnit.loc = 'board'; handUnit.slot = slot; handUnit.summonedTurn = this.turn;
+          b.push(handUnit);
+          boardUnit.loc = 'hand';
+          p.hand.push(boardUnit);
+          this.log(`${handUnit.name} 上场，${boardUnit.name} 回到手牌`);
+          break;
+        }
+        case 'spawnDef': {
+          const def = this.db.byId[op.defId];
+          if (def) {
+            const nc = new CardInst(def, me, this);
+            nc.loc = op.loc === 'front' ? 'front' : 'board';
+            nc.summonedTurn = this.turn;
+            (nc.loc === 'front' ? this.frontline : this.players[me].board).push(nc);
+            this.log(`增援 ${nc.name}`);
+          }
+          break;
+        }
+        case 'triggerAllDestruction': {
+          for (const u of [...this.unitsOf(me)]) {
+            const cls = u._parsed || (u._parsed = parseClauses(u.text));
+            for (const cl of cls) if (cl.kind === 'destruction') this.execOps(cl.ops, u, { trigger: true });
+          }
+          this.log('触发我方所有亡计');
           break;
         }
         case 'dotAllEnemy': {
@@ -4565,9 +4891,16 @@
     return deck.slice(0, RULES.DECK_SIZE);
   }
 
+  /** 由 _runSpecialOrder 专门实现的指令卡 id（通用解析不可达，审计需跳过） */
+  const SPECIAL_ORDER_IDS = new Set(('committed_crew echelon infiltrate contest_doctrine front_and_homeland air_escort '
+    + 'japan_duty feigned_retreat persian_corridor victory_banners fortunes_of_war grim_day yank_the_army_weekly '
+    + 'colossus seac scrap_metal admiral_hipper run_the_battlefield rm_bersaglieri grand_plans reorganize '
+    + 'special_attack strong_bond eastern_front vanguard_ita rule_the_skies ats').split(' ').map(k => 'card_event_' + k));
+
   return {
     RULES, NATION_CODE, DEFAULT_HQ_CODE,
     Game, CardInst, makeRng, parseClauses, parseDeckCode, buildDb, autoDeck,
+    SPECIAL_ORDER_IDS,
     validateDeck, rarityLimit, isEliteCard, RARITY_LIMITS, MAJOR_NATIONS, ALLY_NATIONS, ALLY_CARD_LIMIT,
   };
 });
