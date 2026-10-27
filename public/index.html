@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KARDS 网页版 - 二战卡牌游戏</title>
-<link rel="stylesheet" href="css/kards.css?v=33">
+<link rel="stylesheet" href="css/kards.css?v=34">
 <link rel="preload" href="data/cards.json" as="fetch" crossorigin>
 </head>
 <body>
@@ -79,7 +79,7 @@
       <div class="hbb-slot" id="lan-info"></div>
       <div class="hbb-foot">
         <span>玩家自制网页致敬版 · 与 1939 Games 官方无关</span>
-        <b class="build-tag">构建 v33</b>
+        <b class="build-tag">构建 v34</b>
       </div>
     </div>
   </div>
@@ -137,8 +137,10 @@
     <div class="ppanel" id="opp-panel">
       <div class="avatar" id="opp-avatar"></div>
       <div class="ppanel-name" id="opp-name">对手</div>
-      <div class="kredit" id="opp-kredit"><b class="kb-cur">0</b><span class="kb-k">K</span></div>
+      <div class="kredit" id="opp-kredit"><b class="kb-cur">0</b><span class="kb-k">K</span><span class="kb-slots">1</span></div>
     </div>
+    <!-- 对手牌库堆（官方：左上角头像压在牌堆上） -->
+    <div class="deck-stack opp" aria-hidden="true"></div>
 
     <!-- 对手支援阵线 -->
     <div class="support-line" id="line-opp">
@@ -172,8 +174,10 @@
     <div class="ppanel" id="own-panel">
       <div class="avatar" id="own-avatar"></div>
       <div class="ppanel-name" id="own-name">你</div>
-      <div class="kredit" id="own-kredit"><b class="kb-cur">0</b><span class="kb-k">K</span></div>
+      <div class="kredit" id="own-kredit"><b class="kb-cur">0</b><span class="kb-k">K</span><span class="kb-slots">1</span></div>
     </div>
+    <!-- 己方牌库堆（官方：右下角） -->
+    <div class="deck-stack own" aria-hidden="true"></div>
 
     <!-- 按钮 -->
     <button class="game-btn thin" id="btn-enemy">敌方</button>
@@ -236,12 +240,12 @@
 <!-- card detail popup -->
 <div id="card-popup" class="card-popup hidden"></div>
 
-<script src="js/vendor/gsap.min.js?v=33"></script>
-<script src="js/engine.js?v=33"></script>
-<script src="js/ai.js?v=33"></script>
-<script src="js/net.js?v=33"></script>
-<script src="js/sfx.js?v=33"></script>
-<script src="js/ui.js?v=33"></script>
-<script src="js/main.js?v=33"></script>
+<script src="js/vendor/gsap.min.js?v=34"></script>
+<script src="js/engine.js?v=34"></script>
+<script src="js/ai.js?v=34"></script>
+<script src="js/net.js?v=34"></script>
+<script src="js/sfx.js?v=34"></script>
+<script src="js/ui.js?v=34"></script>
+<script src="js/main.js?v=34"></script>
 </body>
 </html>

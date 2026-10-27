@@ -547,8 +547,11 @@
       void b.offsetWidth;
       b.classList.add('pop');
     }
+    // 官方 HUD：大号当前值 + K 图标 + 小号槽数（"0 K 5"）
+    const slotsEl = b.querySelector('.kb-slots');
+    if (slotsEl) slotsEl.textContent = max != null ? max : '';
     const k = b.querySelector('.kb-k');
-    if (k) k.textContent = max > 12 ? 'K·' + max : 'K';
+    if (k) k.textContent = 'K';
   }
 
   // ---------------- FLIP（GSAP 位移动画） ----------------
