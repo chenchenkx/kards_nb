@@ -4,51 +4,83 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KARDS 网页版 - 二战卡牌游戏</title>
-<link rel="stylesheet" href="css/kards.css?v=29">
+<link rel="stylesheet" href="css/kards.css?v=30">
 <link rel="preload" href="data/cards.json" as="fetch" crossorigin>
 </head>
 <body>
 
-<!-- ============ START SCREEN ============ -->
+<!-- ============ START SCREEN（对齐官方主菜单：顶栏 + 左栏导航 + 中央横幅/组卡区 + 右栏 + 底栏） ============ -->
 <div id="start-screen" class="screen">
   <div class="start-bg"></div>
-  <div class="start-panel">
-    <div class="start-logo">
-      <div class="logo-star">★</div>
-      <h1>KARDS</h1>
-      <div class="logo-sub">二战卡牌游戏 · 网页版</div>
-      <div id="boot-status" class="boot-status">正在载入卡牌数据…</div>
+  <div class="home-wrap">
+    <!-- 顶栏：徽记 + 标题 + 载入状态 / 卡牌数 -->
+    <div class="home-topbar">
+      <div class="ht-left">
+        <div class="ht-logo">✪</div>
+        <div class="ht-title">KARDS<span>二战卡牌游戏 · 网页版</span></div>
+        <div id="boot-status" class="boot-status">正在载入卡牌数据…</div>
+      </div>
+      <div class="ht-right" id="card-count-label"></div>
     </div>
-    <div class="start-section">
-      <div class="start-label">选择国家</div>
-      <div id="nation-grid" class="nation-grid"></div>
-    </div>
-    <div class="start-section">
-      <div class="start-label">总部 / 副国</div>
-      <div class="deck-row">
-        <select id="hq-select" class="code-input" style="flex:1;font-size:12px;padding:6px 8px;letter-spacing:0;text-align:left"></select>
-        <select id="ally-select" class="code-input" style="flex:1;font-size:12px;padding:6px 8px;letter-spacing:0;text-align:left"></select>
+
+    <div class="home-main">
+      <!-- 左栏导航（官方：开始 / 卡牌 / 商店） -->
+      <div class="home-nav">
+        <button class="nav-item primary" id="btn-vs-ai"><span class="ni-ico">▶</span><span class="ni-txt">开始<b>对战</b></span></button>
+        <button class="nav-item" id="btn-collection"><span class="ni-ico">🃏</span><span class="ni-txt">卡牌<b>收藏</b></span></button>
+        <button class="nav-item" id="btn-preset-deck"><span class="ni-ico">✦</span><span class="ni-txt">社区<b>卡组</b></span></button>
+      </div>
+
+      <!-- 中央：横幅（扇形国家卡艺术）+ 组卡区 -->
+      <div class="home-center">
+        <div class="home-banner">
+          <div class="hb-cards" aria-hidden="true">
+            <i class="hbc c1"></i><i class="hbc c2"></i><i class="hbc c3"></i><i class="hbc c4"></i><i class="hbc c5"></i>
+          </div>
+          <div class="hb-text">
+            <b>组建你的军团</b>
+            <span>选择国家与总部，部署支援阵线，夺取前线，摧毁敌方总部！</span>
+          </div>
+          <div class="hb-dots" aria-hidden="true"><i class="on"></i><i></i><i></i></div>
+        </div>
+        <div class="home-setup">
+          <div class="setup-block">
+            <div class="setup-label">选择国家</div>
+            <div id="nation-grid" class="nation-grid"></div>
+          </div>
+          <div class="setup-block cols">
+            <div class="setup-col">
+              <div class="setup-label">总部</div>
+              <select id="hq-select" class="code-input"></select>
+            </div>
+            <div class="setup-col">
+              <div class="setup-label">副国</div>
+              <select id="ally-select" class="code-input"></select>
+            </div>
+            <div class="setup-col deckname-col">
+              <div class="setup-label">当前卡组</div>
+              <div id="deck-name-label" class="deck-name-label">自动卡组</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右栏（官方：Bilibili / 竞技场 / 打开卡包） -->
+      <div class="home-side">
+        <button class="side-item" id="btn-build-deck"><span class="si-ico">🛠</span><span class="si-txt">卡组<b>构筑</b></span></button>
+        <button class="side-item" id="btn-auto-deck"><span class="si-ico">⚡</span><span class="si-txt">自动<b>卡组</b></span></button>
+        <button class="side-item" id="btn-create-room"><span class="si-ico">🏠</span><span class="si-txt">创建<b>房间</b></span></button>
+        <button class="side-item" id="btn-join-room"><span class="si-ico">🔑</span><span class="si-txt">加入<b>房间</b></span></button>
       </div>
     </div>
-    <div class="start-section">
-      <div class="start-label">卡组 <span id="deck-name-label" class="deck-name-label">自动卡组</span></div>
-      <div class="deck-row">
-        <button class="btn btn-deck" id="btn-auto-deck">自动卡组</button>
-        <button class="btn btn-deck" id="btn-preset-deck">社区卡组</button>
-        <button class="btn btn-deck" id="btn-build-deck">卡组构筑</button>
+
+    <!-- 底栏（官方：军需箱 / 任务 + 状态区） -->
+    <div class="home-bottombar">
+      <div class="hbb-slot" id="lan-info"></div>
+      <div class="hbb-foot">
+        <span>玩家自制网页致敬版 · 与 1939 Games 官方无关</span>
+        <b class="build-tag">构建 v30</b>
       </div>
-    </div>
-    <div class="start-section start-actions">
-      <button class="btn btn-primary" id="btn-vs-ai">⚔ 人机对战</button>
-      <button class="btn btn-lan" id="btn-create-room">创建房间</button>
-      <button class="btn btn-lan" id="btn-join-room">加入房间</button>
-    </div>
-    <div class="start-section">
-      <button class="btn" id="btn-collection" style="width:100%">🃏 卡牌收藏</button>
-    </div>
-    <div class="start-lan" id="lan-info"></div>
-    <div class="start-footer">
-      <span id="card-count-label"></span> · 玩家自制网页致敬版 · 与 1939 Games 官方无关 · <b style="color:#e8c96a">构建 v29</b>
     </div>
   </div>
 </div>
@@ -204,12 +236,12 @@
 <!-- card detail popup -->
 <div id="card-popup" class="card-popup hidden"></div>
 
-<script src="js/vendor/gsap.min.js?v=29"></script>
-<script src="js/engine.js?v=29"></script>
-<script src="js/ai.js?v=29"></script>
-<script src="js/net.js?v=29"></script>
-<script src="js/sfx.js?v=29"></script>
-<script src="js/ui.js?v=29"></script>
-<script src="js/main.js?v=29"></script>
+<script src="js/vendor/gsap.min.js?v=30"></script>
+<script src="js/engine.js?v=30"></script>
+<script src="js/ai.js?v=30"></script>
+<script src="js/net.js?v=30"></script>
+<script src="js/sfx.js?v=30"></script>
+<script src="js/ui.js?v=30"></script>
+<script src="js/main.js?v=30"></script>
 </body>
 </html>

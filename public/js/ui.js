@@ -680,76 +680,79 @@
   };
 
   /**
-   * 燃烧爆裂 —— 对齐原版命中/摧毁火焰（gif_04 帧 32-45）：
-   * 白闪核心 + 6 条火焰舌（各自随机闪烁）+ 火星，总时长约 0.6-0.8s
-   * （view.md 2.14.2：命中火焰实测 0.4~0.8s，比旧版 0.9s 收紧）。
+   * 燃烧 —— 对齐官方形态（FX差异.md #2；官方录屏 hb4/hb3 实测）：
+   * 火焰**小、居中、留在卡上持续燃烧**（~0.7s，白芯黄焰，帧间闪烁），
+   * 配**白→灰烟向上飘**；不再是"6 条火焰舌向外炸开"。
+   * 命中瞬间保留一次短促白闪（官方命中首帧有亮芯）。
    */
   UI.fxBurst = function (c, opts) {
     const g = G();
     if (!g || !c) return;
     const big = !(opts && opts.small);
-    const scale = big ? 1 : 0.72;
+    const scale = big ? 1 : 0.8;
 
-    // ① 中央白闪核心（~200ms 内炸开消散）
+    // ① 命中白闪（快速收敛，仅作首帧亮芯）
     const core = document.createElement('div');
     core.className = 'blast-core';
     core.style.left = c.x + 'px';
     core.style.top = c.y + 'px';
     fxLayer().appendChild(core);
-    g.timeline().fromTo(core, { scale: 0.25 * scale, opacity: 0.95 },
-      { scale: 1.9 * scale, opacity: 0, duration: 0.2, ease: 'power3.out' })
+    g.timeline().fromTo(core, { scale: 0.3 * scale, opacity: 0.85 },
+      { scale: 1.15 * scale, opacity: 0, duration: 0.16, ease: 'power2.out' })
       .add(() => core.remove());
 
-    // ② 火焰舌：6 条，随机方位/大小，各自独立闪烁（原版帧间亮度起伏大）
-    const n = big ? 6 : 4;
-    for (let i = 0; i < n; i++) {
+    // ② 中央火焰簇：3 层火焰叠在卡上原地燃烧，**不向外漂移**
+    //    （官方：火焰约占卡面 1/3 宽，白芯黄焰靠帧间亮度/形变拉层次）
+    const layers = [
+      { w: 76, h: 124, o: 0.82, dx: 0, dy: -4 },   // 后层大焰
+      { w: 54, h: 96, o: 0.92, dx: -7, dy: 4 },    // 中层
+      { w: 40, h: 76, o: 1, dx: 6, dy: 10 },       // 前层白芯
+    ];
+    for (const L of layers) {
       const f = document.createElement('div');
       f.className = 'flame';
-      const ang = (Math.PI * 2 * i) / n + (Math.random() - 0.5) * 0.9;
-      const dist = (14 + Math.random() * 30) * scale;
-      f.style.left = c.x + 'px';
-      f.style.top = c.y + 'px';
+      f.style.left = (c.x + L.dx * scale) + 'px';
+      f.style.top = (c.y + L.dy * scale) + 'px';
+      f.style.width = Math.round(L.w * scale) + 'px';
+      f.style.height = Math.round(L.h * scale) + 'px';
       fxLayer().appendChild(f);
-      const tl = g.timeline({ delay: i * 0.028 + Math.random() * 0.03 });
-      tl.fromTo(f, { scale: 0.2 * scale, opacity: 0, rotation: (Math.random() - 0.5) * 40 },
-        { scale: (0.78 + Math.random() * 0.4) * scale, opacity: 0.95, rotation: (Math.random() - 0.5) * 16,
-          duration: 0.08, ease: 'back.out(2.2)' })
-        .to(f, {
-          x: Math.cos(ang) * dist, y: Math.sin(ang) * dist - 8 * scale,
-          duration: 0.12, ease: 'power2.out',
-        }, 0);
-      // 闪烁：4 段随机脉冲（原版靠帧间闪烁拉层次，但整体收紧到 0.8s 内）
-      for (let k = 0; k < 4; k++) {
+      const tl = g.timeline({ delay: Math.random() * 0.04 });
+      tl.fromTo(f, { scaleY: 0.35, scaleX: 0.6, opacity: 0 },
+        { scaleY: 1, scaleX: 1, opacity: L.o, duration: 0.09, ease: 'back.out(2)' });
+      // 原地闪烁：3 段随机脉动（纵向蹿动 + 亮度起伏）
+      for (let k = 0; k < 3; k++) {
         tl.to(f, {
-          scale: (0.72 + Math.random() * 0.62) * scale,
-          opacity: 0.62 + Math.random() * 0.38,
-          x: Math.cos(ang) * (dist + (Math.random() * 10 - 5)),
-          y: Math.sin(ang) * dist - 8 * scale + (Math.random() * 10 - 5),
-          duration: 0.04 + Math.random() * 0.03, ease: 'none',
+          scaleY: 0.88 + Math.random() * 0.34,
+          scaleX: 0.86 + Math.random() * 0.26,
+          opacity: +(L.o * (0.68 + Math.random() * 0.32)).toFixed(2),
+          y: -(2 + Math.random() * 6),
+          duration: 0.07 + Math.random() * 0.05, ease: 'none',
         });
       }
-      tl.to(f, { scale: (0.45 + Math.random() * 0.3) * scale, opacity: 0.4, duration: 0.1, ease: 'power2.in' })
-        .to(f, { scale: 0.1, opacity: 0, duration: 0.12, ease: 'power2.in' })
+      tl.to(f, { scaleY: 0.6, scaleX: 0.55, opacity: 0.5, duration: 0.1, ease: 'power1.in' })
+        .to(f, { scaleY: 0.15, scaleX: 0.2, opacity: 0, duration: 0.12, ease: 'power2.in' })
         .add(() => f.remove());
     }
 
-    // ③ 烧尽后的黑烟（原版：火焰熄灭后黑烟笼罩约 0.45s；火焰收紧后提前到 ~0.4s）
-    setTimeout(() => UI.fxDarkSmoke(c, { n: 4 }), 400);
+    // ③ 白→灰烟向上飘（官方：烟从火里升起；120ms 后开始，持续 ~0.9s）
+    setTimeout(() => UI.fxPuffs(c, { n: 5, spread: 18, life: 0.95 }), 120);
+    // ④ 烧尽后的黑烟（原版：火焰熄灭后黑烟笼罩 ~0.45s）
+    setTimeout(() => UI.fxDarkSmoke(c, { n: 3 }), 520);
 
-    // ③ 火星：向外飞散 + 下坠
-    const ne = big ? 9 : 5;
+    // ⑤ 火星：少量、集中向上飞（不再四散）
+    const ne = big ? 4 : 3;
     for (let i = 0; i < ne; i++) {
       const e = document.createElement('div');
       e.className = 'ember';
       e.style.left = c.x + 'px';
       e.style.top = c.y + 'px';
       fxLayer().appendChild(e);
-      const ang = Math.random() * Math.PI * 2;
-      const r = 26 + Math.random() * 46;
-      g.timeline({ delay: Math.random() * 0.12 }).to(e, {
-        x: Math.cos(ang) * r, y: Math.sin(ang) * r * 0.7 + 12,
+      const ang = -Math.PI / 2 + (Math.random() - 0.5) * 1.5;
+      const r = 20 + Math.random() * 34;
+      g.timeline({ delay: 0.1 + Math.random() * 0.2 }).to(e, {
+        x: Math.cos(ang) * r, y: Math.sin(ang) * r,
         scale: 0.2, opacity: 0,
-        duration: 0.36 + Math.random() * 0.3, ease: 'power2.out',
+        duration: 0.4 + Math.random() * 0.25, ease: 'power2.out',
       })
         .add(() => e.remove());
     }
@@ -871,9 +874,10 @@
     wrap.className = 'cast-card';
     wrap.style.left = (TABLE_W / 2) + 'px';
     wrap.style.top = (TABLE_H * 0.44) + 'px';
+    // 官方施法只有"大卡展示后落位"（gif_03 帧 0-35），克制：
+    // 仅保留轻微暗场 + 柔光托底，无放射线/冲击波/抖动/火星
     wrap.innerHTML =
       `<div class="cast-halo"></div>` +
-      `<div class="cast-rays"></div>` +
       (srcUrl ? `<div class="cast-frame"><img src="${srcUrl}" alt=""></div>`
               : `<div class="cast-frame"></div>`);
     // 卡面本身已印中文卡名，不再额外挂英文名字条（会压到后面的总部卡）
@@ -881,7 +885,6 @@
 
     const frame = wrap.querySelector('.cast-frame');
     const halo = wrap.querySelector('.cast-halo');
-    const rays = wrap.querySelector('.cast-rays');
     SFX.play('cast');
 
     if (!g) {
@@ -892,7 +895,6 @@
     // 用 GSAP 自己的百分比位移做居中，后续 y/scale 补间才不会把居中覆盖掉
     gsap.set(wrap, { xPercent: -50, yPercent: -50 });
 
-    const cx = TABLE_W / 2, cy = TABLE_H * 0.44;
     const tl = gsap.timeline({ onComplete: () => { wrap.remove(); dim.remove(); } });
 
     // ① 从手牌位甩出（0.34s，back.out 收势）
@@ -900,45 +902,16 @@
       .fromTo(wrap, { y: 230, scale: 0.42, opacity: 0, rotation: -7 },
       { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.34, ease: 'back.out(1.55)' }, 0)
       .fromTo(halo, { scale: 0.35, opacity: 0 },
-        { scale: 1, opacity: 1, duration: 0.32, ease: 'power2.out' }, 0.04)
-      .fromTo(rays, { scale: 0.55, opacity: 0, rotation: -26 },
-        { scale: 1.05, opacity: 0.7, rotation: 0, duration: 0.55, ease: 'power2.out' }, 0.06)
-      // ② 悬停呼吸（原版卡牌在中央会轻微起伏）
-      .to(frame, { scale: 1.035, duration: 0.34, ease: 'sine.inOut', yoyo: true, repeat: 1 }, 0.36)
-      // ③ 结算冲击波（约 0.62s 处，和后续伤害/抽牌事件对齐）
-      .add(() => {
-        SFX.play('hit');
-        const pulse = document.createElement('div');
-        pulse.className = 'cast-pulse';
-        pulse.style.left = cx + 'px';
-        pulse.style.top = cy + 'px';
-        layer.appendChild(pulse);
-        gsap.fromTo(pulse, { scale: 0.3, opacity: 0.95 },
-          { scale: 4.2, opacity: 0, duration: 0.55, ease: 'power2.out',
-            onComplete: () => pulse.remove() });
-        UI.shake(4);
-      }, 0.62)
-      // ④ 烧尽：卡面过曝 → 上浮缩小淡出 + 火星
-      .to(dim, { opacity: 0, duration: 0.34, ease: 'power2.in' }, 1.02)
-      .to(frame, { filter: 'brightness(2.4) saturate(1.35)', duration: 0.16, ease: 'power2.in' }, 1.0)
-      .to(wrap, { opacity: 0, scale: 1.07, y: -30, duration: 0.34, ease: 'power2.in' }, 1.06)
-      .to(halo, { opacity: 0, duration: 0.3 }, 1.04)
-      .to(rays, { opacity: 0, duration: 0.3 }, 1.04)
-      .add(() => {
-        for (let i = 0; i < 10; i++) {
-          const e = document.createElement('div');
-          e.className = 'cast-ember';
-          e.style.left = cx + 'px';
-          e.style.top = cy + 'px';
-          layer.appendChild(e);
-          const ang = Math.random() * Math.PI * 2;
-          const r = 60 + Math.random() * 90;
-          gsap.fromTo(e, { scale: 1, opacity: 1 },
-            { x: Math.cos(ang) * r, y: Math.sin(ang) * r * 0.7 - 40,
-              scale: 0.2, opacity: 0, duration: 0.5 + Math.random() * 0.35,
-              ease: 'power2.out', onComplete: () => e.remove() });
-        }
-      }, 1.06);
+        { scale: 1, opacity: 0.55, duration: 0.3, ease: 'power2.out' }, 0.04)
+      // ② 悬停呼吸（轻微起伏）
+      .to(frame, { scale: 1.03, duration: 0.36, ease: 'sine.inOut', yoyo: true, repeat: 1 }, 0.36)
+      // ③ 结算点（0.62s，和后续伤害/抽牌事件对齐）：仅音效，视觉不砸屏
+      .add(() => SFX.play('hit'), 0.62)
+      // ④ 收场：卡面微亮 → 上浮缩小淡出
+      .to(frame, { filter: 'brightness(1.8) saturate(1.1)', duration: 0.18, ease: 'power2.in' }, 0.96)
+      .to(dim, { opacity: 0, duration: 0.3, ease: 'power2.in' }, 0.98)
+      .to(wrap, { opacity: 0, scale: 1.05, y: -22, duration: 0.3, ease: 'power2.in' }, 1.0)
+      .to(halo, { opacity: 0, duration: 0.28 }, 0.98);
 
     return 700;   // 后续事件（伤害/抽牌）在第 0.7s 左右开始，卡牌仍在中央
   };
