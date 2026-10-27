@@ -77,19 +77,20 @@
     const d = document.createElement('div');
     d.className = 'dmg-number' + (heal ? ' heal' : '');
     d.textContent = (heal ? '+' : '−') + amount;
-    const x = c.x + (Math.random() * 30 - 15);
-    const y = c.y - 46;
+    // 官方（f05_26）：数字小号、贴近卡面、米白描边；不再大号红色上浮 52px
+    const x = c.x + (Math.random() * 22 - 11);
+    const y = c.y - 30;
     d.style.left = x + 'px';
     d.style.top = y + 'px';
     fxLayer().appendChild(d);
     if (!g) { setTimeout(() => d.remove(), 1000); return; }
     gsap.timeline()
-      .fromTo(d, { scale: 0.3, opacity: 0, y: 16 },
-        { scale: 1.35, opacity: 1, y: 0, duration: 0.13, ease: 'back.out(2.5)' })
-      .to(d, { scale: 1, duration: 0.09, ease: 'power2.out' })
-      .to(d, { y: -52, x: (Math.random() * 24 - 12), opacity: 0, duration: 0.62, ease: 'power1.out' })
+      .fromTo(d, { scale: 0.4, opacity: 0, y: 8 },
+        { scale: 1.12, opacity: 1, y: 0, duration: 0.11, ease: 'power2.out' })
+      .to(d, { scale: 1, duration: 0.08, ease: 'power2.out' })
+      .to(d, { y: -22, x: (Math.random() * 14 - 7), opacity: 0, duration: 0.5, ease: 'power1.out' })
       .set(d, { display: 'none' });
-    setTimeout(() => d.remove(), 950);
+    setTimeout(() => d.remove(), 800);
   };
 
   // ---------------- 卡牌元素池 ----------------
@@ -1096,12 +1097,15 @@
             const tl = gsap.timeline({
               onComplete: () => { gsap.set(el, { clearProps: 'transform,filter' }); next(); },
             });
-            // ① 落地：原版实测 0.6~0.9s 缓慢落定，且**无回弹、无震屏**（view.md 超雄 2.14.2/2.14.3）
-            //    用 power3.out 减速落位，不做 overshoot
+            // ① 起手大卡展示（官方 gif_03/gif_05：卡先以 ~1.5x 较大尺寸展示，短暂停留后收缩落位）
+            //    view.md 基线：出牌全程 0.6~0.9s、无回弹、无震屏
             tl.add(() => UI.fxAfterimage(el, -46), 0)
-              .fromTo(el, { y: -74, scale: 1.34, opacity: 0.55, rotation: -2.5 },
-                { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.58, ease: 'power3.out' })
-              // ② 落定微沉（无回弹，仅极轻下压收势）
+              .fromTo(el, { y: -104, scale: 1.52, opacity: 0, rotation: -3 },
+                { y: -92, scale: 1.46, opacity: 1, rotation: 0, duration: 0.16, ease: 'power2.out' })
+              .to(el, { y: -88, duration: 0.1, ease: 'none' })   // 展示停留
+              // ② 收缩落位（power3.out 减速，无 overshoot）
+              .to(el, { y: 0, scale: 1, rotation: 0, duration: 0.3, ease: 'power3.out' })
+              // ③ 落定微沉（无回弹，仅极轻下压收势）
               .to(el, { scaleY: 0.985, scaleX: 1.01, duration: 0.07, ease: 'power2.out' })
               .to(el, { scaleX: 1, scaleY: 1, duration: 0.1, ease: 'power2.out' })
               // ③ 冲击：尘烟 + 细环（原版无震屏，去掉 shake）
@@ -1118,7 +1122,7 @@
               // ④ 出场高光渐收
               .fromTo(el, { filter: 'brightness(1.8) saturate(1.2)' },
                 { filter: 'brightness(1) saturate(1)', duration: 0.26, ease: 'power2.out' }, '-=0.28');
-            return 720;
+            return 760;
           });
         }
       } else if (ev.e === 'turn') {

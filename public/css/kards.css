@@ -139,20 +139,15 @@ html, body {
 .hbc {
   position: absolute; width: 104px; height: 146px; border-radius: 6px;
   box-shadow: 0 10px 22px rgba(0,0,0,.55), inset 0 0 0 2px rgba(232,201,106,.28);
-  display: flex; align-items: center; justify-content: center;
-  font-style: normal; font-size: 38px; color: rgba(232,201,106,.75);
-  text-shadow: 0 2px 8px #000; filter: saturate(.85);
+  background-size: cover; background-position: center;
+  filter: saturate(.92) brightness(.94);
 }
-.hbc.c1 { left: 4%;  top: 26px; transform: rotate(-13deg); background: linear-gradient(160deg, #8a2020, #451010); }
-.hbc.c1::after { content: '★'; }
-.hbc.c2 { left: 22%; top: 8px;  transform: rotate(-4deg);  background: linear-gradient(160deg, #2c2c30, #141416); }
-.hbc.c2::after { content: '✠'; }
-.hbc.c3 { left: 41%; top: 20px; transform: rotate(4deg);   background: linear-gradient(160deg, #24301c, #10160c); }
-.hbc.c3::after { content: '❁'; }
-.hbc.c4 { left: 59%; top: 10px; transform: rotate(12deg);  background: linear-gradient(160deg, #7a5c1e, #3a2c0e); }
-.hbc.c4::after { content: '✈'; }
-.hbc.c5 { left: 76%; top: 30px; transform: rotate(20deg);  background: linear-gradient(160deg, #7a1f1f, #401010); }
-.hbc.c5::after { content: '♠'; }
+/* 横幅用各国代表卡真实卡面（中文印面，与官方横幅一致） */
+.hbc.c1 { left: 4%;  top: 26px; transform: rotate(-13deg); background-image: url('/cards/img/tiger_ih.png'); }
+.hbc.c2 { left: 22%; top: 8px;  transform: rotate(-4deg);  background-image: url('/cards/img/kv1_1939.png'); }
+.hbc.c3 { left: 41%; top: 20px; transform: rotate(4deg);   background-image: url('/cards/img/spitfire_mk_ii.png'); }
+.hbc.c4 { left: 59%; top: 10px; transform: rotate(12deg);  background-image: url('/cards/img/101st_airborne.png'); }
+.hbc.c5 { left: 76%; top: 30px; transform: rotate(20deg);  background-image: url('/cards/img/a6m2_zero.png'); }
 .hb-text { position: absolute; left: 22px; bottom: 20px; max-width: 64%; }
 .hb-text b { display: block; font-size: 26px; letter-spacing: .16em; color: #efe9d6; text-shadow: 0 2px 10px rgba(0,0,0,.9); }
 .hb-text span { display: block; margin-top: 6px; font-size: 12px; letter-spacing: .06em; color: #b3ab97; text-shadow: 0 1px 4px #000; }
@@ -619,11 +614,12 @@ html, body {
 .fx-layer { position: absolute; inset: 0; pointer-events: none; z-index: 300; overflow: hidden; }
 .dmg-number {
   position: absolute; transform: translate(-50%, 0);
-  font-size: 38px; font-weight: 900; color: #ff5f45;
-  text-shadow: 0 2px 6px #000, 0 0 18px rgba(255,60,30,.85), 0 0 3px #000;
+  /* 官方实测（f05_26）：小号、米白、深色描边贴卡显示 */
+  font-size: 20px; font-weight: 800; color: #f4eeda;
+  text-shadow: 0 1px 0 #000, 1px 0 0 #000, -1px 0 0 #000, 0 -1px 0 #000, 0 2px 4px rgba(0,0,0,.9);
   white-space: nowrap;      /* 动画由 GSAP 驱动（弹出→上浮渐隐），不再用 CSS keyframes */
 }
-.dmg-number.heal { color: #7ce38b; text-shadow: 0 2px 6px #000, 0 0 14px rgba(90,255,140,.6); }
+.dmg-number.heal { color: #8fe89a; }
 .attack-trail {
   position: absolute;
   height: 5px;

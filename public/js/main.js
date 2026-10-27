@@ -87,6 +87,26 @@
   }
   const NATION_FLAGS = {};   // 兼容旧引用
   const NATION_ZH = { Germany: '德国', USA: '美国', Soviet: '苏联', Japan: '日本', Britain: '英国', France: '法国', Italy: '意大利', Poland: '波兰', Finland: '芬兰', Anzac: '澳新军团', Neutral: '中立' };
+  // 总部中文名（官方总部以战场地名命名，57 个全量映射；缺省回落英文名）
+  const HQ_ZH = {
+    'ALAM EL HALFA': '阿拉姆哈勒法', 'ALEXANDRIA': '亚历山大', 'ARDENNES': '阿登', 'ARNHEM': '阿纳姆',
+    'ARRACOURT': '阿拉库尔', 'BAGAC': '巴加克', 'BAGUIO': '碧瑶', 'BASTOGNE': '巴斯托涅',
+    'BATAAN': '巴丹', 'BRYANSK': '布良斯克', 'BUNKER': '掩体', 'CHERBOURG': '瑟堡',
+    'CORREGIDOR': '科雷希多', 'DANZIG': '但泽', 'DERNA': '德尔纳', 'DJEBEL ABIOD': '阿比奥山',
+    'DJEDEIDA': '杰代达', 'EL ALAMEIN': '阿拉曼', 'FLOTILLA': '舰队', 'FORMOSA': '台湾',
+    'FORTRESS DARWIN': '达尔文要塞', 'GALLOPING HORSE': '飞马岭', 'GAZALA': '加查拉',
+    'GUADALCANAL': '瓜达尔卡纳尔', 'HENDERSON FIELD': '亨德森机场', 'HERMOSA': '赫尔莫萨',
+    'KALININ': '加里宁', 'KASSERINE': '凯塞林', 'KLIN': '克林', 'KURSK': '库尔斯克',
+    'LAYAC': '拉亚克', 'LONDON': '伦敦', 'MANILA': '马尼拉', 'MARIVELES': '马里韦莱斯',
+    'MATANIKAU': '马塔尼考', 'MATEUR': '马特尔', 'MEDJEZ EL BAB': '迈杰兹巴卜',
+    'MERSA MATRUH': '马特鲁港', 'MOSCOW': '莫斯科', 'MOUNT AUSTEN': '奥斯汀山',
+    'RANGOON': '仰光', 'ROSARIO': '罗萨里奥', 'SAN FERNANDO': '圣费尔南多',
+    'SEA HORSE': '海马岭', 'SMOLENSK': '斯摩棱斯克', 'STALINGRAD': '斯大林格勒',
+    'SUPPLY TRAIN': '补给列车', 'TAIVU POINT': '泰武角', 'TEBOURBA': '特卜尔巴',
+    'THALA': '塔拉', 'THEATERS OF WAR': '战区', 'TOBRUK': '托布鲁克', 'TRUK': '特鲁克',
+    'TULA': '图拉', 'TUNIS CITY': '突尼斯城', 'VILLERS-BOCAGE': '维莱博卡日', 'WASHINGTON': '华盛顿',
+  };
+  function hqName(h) { return (h && HQ_ZH[h.name]) || (h && h.name) || ''; }
 
   function buildNationGrid() {
     const grid = document.getElementById('nation-grid');
@@ -120,7 +140,7 @@
     for (const h of list) {
       const opt = document.createElement('option');
       opt.value = h.id;
-      opt.textContent = `${h.name} · ${h.defense} 防`;
+      opt.textContent = `${hqName(h)} · ${h.defense} 防`;
       if (h.id === keep) opt.selected = true;
       sel.appendChild(opt);
     }
@@ -171,7 +191,7 @@
     const base = App.mode === 'auto' ? `自动${NATION_ZH[App.nation] || App.nation}`
       : App.mode === 'preset' && App.preset ? App.preset.name
       : `自定义${NATION_ZH[App.nation] || App.nation}`;
-    document.getElementById('deck-name-label').textContent = `${base}${ally} · ${hq.name}`;
+    document.getElementById('deck-name-label').textContent = `${base}${ally} · ${hqName(hq)}`;
   }
 
   function selectNation(n) {
