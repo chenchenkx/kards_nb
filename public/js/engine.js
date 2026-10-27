@@ -1017,6 +1017,8 @@
       return ops;
     }
 
+    // "Retreat a unit in the frontline"（1st AIRLANDING BRIGADE）
+    if (/retreat (?:a |an |the )?(?:target |enemy )?unit in the frontline/i.test(t)) { ops.push({ op: 'retreat', target: 'frontlineUnit' }); return ops; }
     // "Pin [all] enemy units" / "Suppress"
     if (/\bpin\b/i.test(t) || /\bsuppress\b/i.test(t)) {
       const tgt = /all enem/.test(t) ? 'allEnemyUnits' : 'unit';
@@ -1039,10 +1041,10 @@
     }
 
     // "Deploy a X" / "Add a X to [the|your] (support line|frontline|battlefield)"
-    m = /(?:deploy|add) (?:a |an |one |two )?(random )?([A-Z0-9'\-\. ]+?) (?:to (?:the |your )?(support line|frontline|battlefield|hand))?/i.exec(t);
+    m = /(?:deploy|add) (?:a |an |one |two )?(random )?([A-Z0-9'\-\. ]+?)(?= (?:fighter|bomber|tank|infantry|artillery|unit|card|to|$))/i.exec(t);
     if (m && m[2] && !/to your hand/.test(t)) {
-      const loc = (m[3] || 'support').toLowerCase();
-      ops.push({ op: 'spawn', name: m[2].trim(), random: !!m[1], loc: /front/.test(loc) ? 'front' : (/hand/.test(loc) ? 'hand' : 'board') });
+      const loc = /support line/.test(t) ? 'support' : /frontline/.test(t) ? 'front' : /your hand/.test(t) ? 'hand' : 'support';
+      ops.push({ op: 'spawn', name: m[2].trim(), random: !!m[1], loc: loc === 'front' ? 'front' : (loc === 'hand' ? 'hand' : 'board') });
       return ops;
     }
 
@@ -3109,6 +3111,11 @@
           case 'randomEnemy': { const l = this.unitsOf(foe).filter(u => u.uid !== src.uid); return l.length ? this.rng.pick(l) : null; }
           case 'randomFriendly': { const l = this.unitsOf(me).filter(u => u.uid !== src.uid); return l.length ? this.rng.pick(l) : null; }
           // 触发事件载荷目标："give it +1+3"（刚部署的单位）/ "Suppress it"（刚被压制的单位）
+          case 'frontlineUnit': {
+            const f = this.frontline.filter(u => u.owner === foe);
+            if (f.length) return f[0];
+            return this.frontline[0] || null;
+          }
           case 'deployed': return (ctx && ctx.card && ctx.card.isUnit) ? ctx.card : null;
           case 'event': {
             if (ctx && ctx.card && ctx.card.isUnit) return ctx.card;
@@ -4617,6 +4624,14 @@
 
     findByName(name, side) {
       const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // "GARRISON unit" / "GLADIATOR" 这类被类型词污染的名字：剥掉尾词再匹配
+      const cleaned = String(name || '')
+        .replace(/\s+(unit|card|fighters?|bombers?|tanks?|infantry|artillery|orders?)$/i, '')
+        .trim();
+      if (cleaned && cleaned !== name) {
+        const hit = this.findByName(cleaned, side);
+        if (hit && hit.length) return hit;
+      }
       const target = norm(name);
       const out = [];
       for (const def of this.db.cards) {
