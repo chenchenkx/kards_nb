@@ -294,13 +294,21 @@
     'attacks? and destroys? .*unit',
     'this unit is dealt damage',
     'moves? into the frontline',
-    'you deploy or add a guard unit',
+    'you deploy (?:or add |another )?(?:an? )?[a-z]+ unit',
+    'you deploy another unit',
     'you play an? [a-z]+ card',
     'your hq takes damage',
+    'your hq gains? (?:defense|defence)',
     '(?:targeted|chosen) unit deals? damage',
     'attack is \\d+\\+',
     'the enemy (?:deploys|plays)',
     'this unit becomes veteran',
+    'a unit becomes veteran',
+    'an? enemy unit is pinned',
+    'a (?:ground |air )?unit retreats',
+    'an? (?:enemy )?unit is destroyed',
+    'undestroyed unit leaves the battlefield',
+    'survives? combat',
     'the enemy draws',
     'end of turn', 'start of turn',
     'this unit attacks',
@@ -420,7 +428,7 @@
       const n = +m[1];
       let target = (m[2] || '').trim().toLowerCase();
       let tgt = 'unit';
-      if (/all enem/.test(target)) tgt = 'allEnemies';
+      if (/each enem|all enem/.test(target)) tgt = 'allEnemies';
       else if (/all enemy (air|units)/.test(target)) tgt = /air/.test(target) ? 'allEnemyAir' : 'allEnemyUnits';
       else if (/enemy hq/.test(target)) tgt = 'enemyHQ';
       else if (/your hq/.test(target)) tgt = 'ownHQ';
@@ -477,10 +485,10 @@
     m = /cards in enemy hand cost \+(\d+)/i.exec(t);
     if (m) return [{ op: 'handTaxAll', n: +m[1] }];
     // 敌方弃牌（随机 / 指定兵种）
-    if (/the enemy discards? (?:a |one )?(?:random )?card/i.test(t)) {
+    if (/the enemy (?:must )?discards? (?:a |one )?(?:random )?card/i.test(t)) {
       return [{ op: 'discard', n: 1, random: true }];
     }
-    m = /the enemy discards? (?:a |one )?(?:random )?(bomber|fighter|infantry|tank|artillery|order)/i.exec(t);
+    m = /the enemy (?:must )?discards? (?:a |one )?(?:random )?(bomber|fighter|infantry|tank|artillery|order)/i.exec(t);
     if (m) return [{ op: 'discard', n: 1, random: true, typed: m[1].toLowerCase() }];
 
     // ---- 老兵化（"Becomes Veteran when ..." 的效果段）----
@@ -545,6 +553,7 @@
     // "Destroy target X" / "Destroy a unit" / "Destroy an enemy unit"
     if (/\bdestroy\b/i.test(t)) {
       let tgt = /destroy that unit|destroy it\b/i.test(t) ? 'enemyUnit' : 'unit';
+      if (/destroy this unit\b/i.test(t)) tgt = 'selfUnit';
       if (/destroy all enem/i.test(t)) tgt = 'allEnemyUnits';
       else if (/destroy (?:a|the|target)? ?(tank|air unit|infantry|artillery|fighter|bomber)/i.test(t)) tgt = 'typed';
       ops.push({ op: 'destroy', target: tgt });
@@ -563,7 +572,13 @@
 
     // "Your HQ gets/gains +N defense" / "Give your HQ +N defense" —— 均为永久提升
     m = /(?:your hq (?:gets|gains)|give your hq|your hq has) \+?(\d+) defense/i.exec(t);
-    if (m) { ops.push({ op: 'hqDef', n: +m[1] }); return ops; }
+    if (m) {
+      ops.push({ op: 'hqDef', n: +m[1] });
+      // 余句继续解析（DINGO："... and you draw a card"）
+      const restQ = t.slice(m.index + m[0].length).trim();
+      if (restQ) ops.push(...parseOps(restQ.replace(/^(?:and|then|,)\s*/i, '').replace(/^\./, '').trim()));
+      return ops;
+    }
     // 明确句式才算 HQ 加成："Your HQ gets +A+D" / "Give your HQ +A+D"
     // （旧兜底只要文本含 "your hq" 和一个 "+N" 就整句当 HQ 加成，
     //   会把 "Gets +1+2 if your HQ has defense over 20" 这类条件自我加成误判）
@@ -725,7 +740,7 @@
     m = /reduce (?:its |this unit's )?operation cost by (\d+)/i.exec(t);
     if (m) { ops.push({ op: 'opCostMod', n: -Math.abs(+m[1]) }); return ops; }
     // "Has Guard when it doesn't have Mobilize" → 条件关键词（否定条件）
-    m = /has (blitz|guard|fury|smokescreen|ambush|shock) (?:while|when) it (?:doesn't|does not) have (\w+)/i.exec(t);
+    m = /has (blitz|guard|fury|smokescreen|ambush|shock|mobilize) (?:while|when) it (?:doesn't|does not) have (\w+)/i.exec(t);
     if (m) { ops.push({ op: 'keyword', kws: [m[1].toLowerCase()], target: 'self', self: true, cond: { c: 'hasKw', side: 'own', kw: m[2].toLowerCase(), neg: true, selfCheck: true } }); return ops; }
 
     // ================= 条件/触发式关键字授予（试玩报告 v9 缺口修复） =================    // 条件已由 parseOps 包装层剥离并挂到 op.cond；execOp 统一求值，不满足则跳过。
@@ -1048,7 +1063,12 @@
     m = /\bset (?:your|the) hq'?s? defense to (\d+)/i.exec(t) || /\bset the defense of each hq to (\d+)/i.exec(t);
     if (m) { ops.push({ op: 'setHqDef', n: +m[1], both: /each hq/i.test(t) }); return ops; }
     m = /\byour hq gains? defense equal to (?:the number of )?([a-z0-9 \-']{1,44})/i.exec(t);
-    if (m) { ops.push({ op: 'setHqDef', n: 0, calc: describeCount(m[1]) }); return ops; }
+    if (m) {
+      // "gains defense equal to X" 是**增加**而非设为（8e MAROCAINS：等于部署单位行动费）
+      if (/its operation cost/i.test(m[1])) ops.push({ op: 'hqDef', calc: { type: 'deployedOpCost' } });
+      else ops.push({ op: 'hqDef', n: 0, calc: describeCount(m[1]) });
+      return ops;
+    }
 
     // --- 进入前线 ---
     if (/\bmoves? into the frontline\b/i.test(t)) { ops.push({ op: 'moveToFront' }); return ops; }
@@ -1311,7 +1331,37 @@
     { re: /this unit is dealt damage\b|^this unit takes damage\b/i, ev: 'selfDamaged' },
     { re: /this unit (?:is destroyed|dies)\b/i, ev: 'selfDestroy' },
     { re: /this unit moves? into the frontline\b/i, ev: 'selfMoveFront' },
+    { re: /a friendly (?:german|soviet|british|american|japanese|french|italian|polish|finnish) unit moves? into the frontline\b/i,
+      ev: 'allyMoveFront',
+      cond: m => {
+        const nat = /(german|soviet|british|american|japanese|french|italian|polish|finnish)/.exec(m[0].toLowerCase());
+        return { c: 'eventNation', nation: NAT_MAP[nat[1]] || nat[1] };
+      } },
     { re: /this unit becomes veteran\b/i, ev: 'becomesVeteran' },
+    // --- 新增事件（v33 批量补齐）：任意单位/敌方单位维度 ---
+    { re: /an? enemy unit is pinned\b/i, ev: 'unitPinned' },
+    { re: /a (?:ground |air |friendly )?unit retreats?\b/i, ev: 'unitRetreated' },
+    { re: /a unit becomes veteran\b/i, ev: 'becomesVeteran' },
+    { re: /you deploy another unit with (\d+) or more attack\b/i, ev: 'ownDeploy', cond: m => ({ c: 'eventAttackLeast', n: +m[1] }) },
+    { re: /you deploy another unit\b/i, ev: 'ownDeploy' },
+    { re: /you deploy (?:or add )?(?:an? )?(non-)?(german|soviet|british|american|japanese|french|italian|polish|finnish) unit\b/i,
+      ev: 'ownDeploy',
+      cond: m => {
+        const nat = /(german|soviet|british|american|japanese|french|italian|polish|finnish)/.exec(m[0].toLowerCase());
+        return { c: 'eventNation', nation: NAT_MAP[nat[1]] || nat[1], neg: !!m[1] };
+      } },
+    { re: /you deploy (?:or add )?(?:an? )?(infantry|tank|artillery|fighter|bomber) unit\b/i, ev: 'ownDeploy', cond: m => ({ c: 'eventType', type: m[1].toLowerCase() }) },
+    { re: /(?:this unit|it) survives? combat\b/i, ev: 'selfSurvive' },
+    { re: /a friendly unit with heavy armor survives? combat\b/i, ev: 'allySurvive', cond: m => ({ c: 'eventHeavyArmor' }) },
+    { re: /a friendly unit survives? combat\b/i, ev: 'allySurvive' },
+    { re: /a friendly (german|soviet|british|american|japanese|french|italian|polish|finnish) (air|ground) unit is destroyed\b/i,
+      ev: 'unitDestroyed',
+      cond: m => ({ c: 'eventAnd', and: [
+        { c: 'eventOwnerFriendly' }, { c: 'eventNation', nation: NAT_MAP[m[1].toLowerCase()] || m[1] }, { c: 'eventType', type: m[2].toLowerCase() },
+      ] }) },
+    { re: /you deploy another unit with operation cost (\d+) or more\b/i, ev: 'ownDeploy', cond: m => ({ c: 'eventOpCostLeast', n: +m[1] }) },
+    { re: /an? (?:enemy )?unit is destroyed\b/i, ev: 'unitDestroyed' },
+    { re: /an? undestroyed unit leaves the battlefield\b/i, ev: 'unitDestroyed' },
     { re: /you play an? ([a-z]+) card\b/i, ev: 'ownCardPlayed', cond: m => ({ c: 'nationPlayed', nation: NAT_MAP[(m[1] || '').toLowerCase()] || m[1] }) },
     { re: /you deploy or add a guard unit\b/i, ev: 'ownGuardDeploy' },
     { re: /you give an? order\b/i, ev: 'ownOrder' },
@@ -1360,21 +1410,39 @@
     if (!ops.length) ops = parseOps(eff.replace(/^[a-z0-9 .'\-]+?\s+(?=gets?|gains?|deals?|destroys?|draws?)/i, ''));
     if (!ops.length) {
       // 触发效果只有裸关键词（如 "Guard"）
-      const km = /^(blitz|guard|fury|smokescreen|ambush|shock)\b\.?$/i.exec(eff);
+      const km = /^(blitz|guard|fury|smokescreen|ambush|shock|mobilize)\b\.?$/i.exec(eff);
       if (km) ops = [{ op: 'keyword', kws: [km[1].toLowerCase()], target: 'self', self: true }];
     }
     if (!ops.length) return null;
+    // "When this unit is destroyed, put it on top of owner's deck" —— 等价于阵亡回牌库顶的静态标记
+    if (event === 'selfDestroy' && ops.length === 1 && ops[0].op === 'toDeckTop') {
+      return { kind: 'static', text: raw, cond: null, ops: [{ op: 'toDeckTop' }] };
+    }
+    // "Once per turn, ..." —— 每回合仅触发一次
+    const once = /^once per turn\b/i.test(String(raw || ''));
     // 触发效果里没写明目标时，增益类默认作用于自身；伤害/摧毁类保持通用目标解析
+    const isDeployEv = /^(ownDeploy|ownGuardDeploy)$/.test(event);
+    const isEventEv = /^(unitPinned|unitRetreated|unitDestroyed|allyMoveFront)$/.test(event);
     for (const o of ops) {
-      if (!['buff', 'keyword', 'buffPer'].includes(o.op)) continue;
+      if (!['buff', 'keyword', 'buffPer', 'opCostMod'].includes(o.op)) continue;
+      if (isDeployEv && /^(give it|it gets|gets)\b/i.test(eff)) { o.target = 'deployed'; o.self = false; continue; }
+      if (isEventEv && /^(give it|it gets|gets)\b/i.test(eff)) { o.target = 'event'; o.self = false; continue; }
       if (!o.target || o.target === 'unit') { o.target = 'self'; o.self = true; }
     }
-    return { kind: 'trigger', event, when: raw, text: raw, cond: cond || null, ops };
+    return { kind: 'trigger', event, when: raw, text: raw, cond: cond || null, ops, once };
   }
 
   function parseTriggerSentence(sent) {
-    const raw = String(sent || '').trim().replace(/[.!?]+$/, '');
+    const raw0 = String(sent || '').trim().replace(/[.!?]+$/, '');
+    if (!raw0) return null;
+    // "Once per turn, ..." 前缀最先剥离（否则会被复合句拆分误切），并回填 once 标记
+    const onceM = /^once per turn[,]?\s*/i.exec(raw0);
+    const raw = onceM ? raw0.slice(onceM[0].length).trim() : raw0;
     if (!raw) return null;
+    const wrapOnce = (t) => {
+      if (t && onceM) (Array.isArray(t) ? t : [t]).forEach(x => { x.once = true; });
+      return t;
+    };
 
     // 复合句拆分："Gets +1+1 when you play a Japanese card, and Guard when attack is 10+."
     const compSplit = /,\s*(?:and\s+)?(?=[^,.]{0,40}\bwhen\b)/i;
@@ -1384,14 +1452,14 @@
       const rest = raw.slice(idx).replace(/^,\s*(?:and\s+)?/i, '').trim();
       const a = parseTriggerSentence(first);
       const b = parseTriggerSentence(rest);
-      if (a && b) return [a, b].flat();
-      if (a) return a;
-      if (b) return b;
+      if (a && b) return wrapOnce([a, b].flat());
+      if (a) return wrapOnce(a);
+      if (b) return wrapOnce(b);
     }
 
     // ① "At the start/end of your turn ..." —— 效果紧跟其后（有无逗号均可）
     let m = /^(?:at|on) the (start|end) of (?:your|the|each) turn\b[,:]?\s*(.*)$/i.exec(raw);
-    if (m) return buildTrigger(m[1].toLowerCase() === 'start' ? 'startOfTurn' : 'endOfTurn', null, m[2], raw);
+    if (m) return wrapOnce(buildTrigger(m[1].toLowerCase() === 'start' ? 'startOfTurn' : 'endOfTurn', null, m[2], raw));
 
     // ② "When/Whenever/After <事件>[,] <效果>"
     m = /^(?:when|whenever|after)\b\s+(.+)$/i.exec(raw);
@@ -1399,7 +1467,7 @@
       const body = normalizeTriggerSubject(m[1]);
       const hit = matchTriggerEvent(body);
       if (!hit) return null;
-      return buildTrigger(hit.event, hit.cond, body.slice(hit.len), raw);
+      return wrapOnce(buildTrigger(hit.event, hit.cond, body.slice(hit.len), raw));
     }
 
     // ③ "<效果> when/after <事件>" —— 效果在前（HUDSON / STUKA 87G 等）
@@ -1408,10 +1476,10 @@
       const effectText = raw.slice(0, wm.index).trim();
       const evText = normalizeTriggerSubject(wm[2]);
       const hit = matchTriggerEvent(evText);
-      if (hit) return buildTrigger(hit.event, hit.cond, effectText, raw);
+      if (hit) return wrapOnce(buildTrigger(hit.event, hit.cond, effectText, raw));
       // 特例："... after giving an order"（你给出指令时）
       if (/^(?:giving|you give)\s+an?\s+order\b/i.test(evText)) {
-        return buildTrigger('ownOrder', null, effectText, raw);
+        return wrapOnce(buildTrigger('ownOrder', null, effectText, raw));
       }
       return null;
     }
@@ -1462,6 +1530,22 @@
       case 'attackAtLeast': return card && card.totalAttack >= (cond.n || 0);
       case 'frontlineEmpty': return game.frontline.length === 0;
       case 'slotsAtMost': return game.players[card.owner].slots <= (cond.n || 0);
+      // --- 事件载荷条件（v33）：过滤触发事件里的那张卡 ---
+      case 'eventNation': return !!(ctx && ctx.nation === cond.nation);
+      case 'eventType': {
+        if (!ctx) return false;
+        const t = ctx.type;
+        if (cond.type === 'air') return t === 'fighter' || t === 'bomber';
+        if (cond.type === 'ground') return t === 'infantry' || t === 'tank' || t === 'artillery';
+        return t === cond.type;
+      }
+      case 'eventKw': return !!(ctx && ctx.card && ctx.card.has && ctx.card.has(cond.kw));
+      case 'eventAttackLeast': return !!(ctx && (ctx.attack || 0) >= (cond.n || 0));
+      case 'eventOpCostLeast': return !!(ctx && ctx.card && ((ctx.card.opCost || 0)) >= (cond.n || 0));
+      case 'eventHeavyArmor': return !!(ctx && ctx.card && (ctx.card.heavyArmor || 0) > 0);
+      case 'eventOwnerFriendly': return !!(ctx && card && ctx.owner != null && ctx.owner === card.owner);
+      case 'eventOwnerEnemy': return !!(ctx && card && ctx.owner != null && ctx.owner !== card.owner);
+      case 'eventAnd': return !!(cond.and && cond.and.every(c2 => evalCond(c2, game, card, ctx)));
       default: return true;
     }
   }
@@ -1561,11 +1645,12 @@
     frontlineCount(side) { return this.frontline.filter(c => c.owner === side).length; }
 
     /** 「for each ...」计数描述符 → 数量（buffPer / drawPer / setHqDef 用） */
-    countOf(desc, src) {
+    countOf(desc, src, ctx) {
       if (!desc) return 0;
       const me = src ? src.owner : this.current;
       const foe = 1 - me;
       switch (desc.type) {
+        case 'deployedOpCost': return (ctx && ctx.card) ? (ctx.card.opCost || 0) : 0;
         case 'kreditsSpent': return this.players[me].kreditsSpent || 0;
         case 'enemyUnits': return this.unitsOf(foe).length;
         case 'unitTypes': return new Set(this.unitsOf(me).map(u => u.type)).size;
@@ -1795,6 +1880,8 @@
         p.hand.push(c);
         if (!silent) this.log(`P${side + 1} 抽到 ${c.name}`);
         if (!silent) this.ev({ e: 'draw', side, uid: c.uid, name: c.name });
+        // "Draw a card when the enemy draws a RESISTANCE order"（1er BCP / 27e DIA）
+        this.fireTrigger('enemyDraw', { side, nation: c.nation, card: c, type: c.type }, u => u.owner !== side);
       }
     }
 
@@ -1905,6 +1992,10 @@
       if (killer && killer.isUnit && killer.loc !== 'discard') {
         this.fireTrigger('selfKill', { killerUid: killer.uid, destroyedUid: c.uid }, u => u.uid === killer.uid);
       }
+      // "When an enemy unit is destroyed" / "when an undestroyed unit leaves the battlefield"
+      this.fireTrigger('unitDestroyed', { uid: c.uid, owner: c.owner, type: c.type, nation: c.nation, attack: c.totalAttack, card: c }, () => true);
+      // "When this unit is destroyed, ..."（T-28）
+      this.fireTrigger('selfDestroy', { uid: c.uid, owner: c.owner, card: c }, u => u.uid === c.uid);
       if (wasFront) {
         this.frontline.splice(this.frontline.indexOf(c), 1);
         if (!this.frontline.length) this.frontlineOwner = -1;
@@ -2060,10 +2151,19 @@
       // 触发器：己方出牌 / 部署守护单位 / 直落前线 / 敌方视角的部署事件
       this.fireTrigger('ownCardPlayed', { owner: side, nation: c.nation }, u => u.owner === side && u.uid !== c.uid);
       this.fireTrigger('enemyDeploy', { owner: side, uid: c.uid }, u => u.owner !== side);
-      if (c.isUnit && c.has('guard')) {
-        this.fireTrigger('ownGuardDeploy', { owner: side, uid: c.uid }, u => u.owner === side && u.uid !== c.uid);
+      if (c.isUnit) {
+        // "When you deploy (another |a <nation/type>) unit ..."（8e MAROCAINS / FELDHERRNHALLE / HOTCHKISS H35）
+        this.fireTrigger('ownDeploy', { owner: side, uid: c.uid, type: c.type, nation: c.nation, attack: c.totalAttack, card: c },
+          u => u.owner === side && u.uid !== c.uid);
+        if (c.has('guard')) {
+          this.fireTrigger('ownGuardDeploy', { owner: side, uid: c.uid, card: c }, u => u.owner === side && u.uid !== c.uid);
+        }
       }
-      if (toFront) this.fireTrigger('selfMoveFront', { uid: c.uid }, u => u.uid === c.uid);
+      if (toFront) {
+        this.fireTrigger('selfMoveFront', { uid: c.uid }, u => u.uid === c.uid);
+        this.fireTrigger('allyMoveFront', { uid: c.uid, owner: c.owner, type: c.type, nation: c.nation, attack: c.totalAttack, card: c },
+          u => u.owner === c.owner && u.uid !== c.uid);
+      }
       return { ok: true };
     }
 
@@ -2121,7 +2221,14 @@
       c.hasActed = true;
       this.applyAuras();
       // 移入前线触发（25. PANZERGRENADIER：移入前线时获得守护）
-      if (toFront) this.fireTrigger('selfMoveFront', { uid: c.uid }, u => u.uid === c.uid);
+      if (toFront) {
+        this.fireTrigger('selfMoveFront', { uid: c.uid }, u => u.uid === c.uid);
+        this.fireTrigger('allyMoveFront', { uid: c.uid, owner: c.owner, type: c.type, nation: c.nation, attack: c.totalAttack, card: c },
+          u => u.owner === c.owner && u.uid !== c.uid);
+      } else {
+        // 撤退触发（TYPHOON Mk IB：地面单位撤退时抽牌）
+        this.fireTrigger('unitRetreated', { uid: c.uid, owner: c.owner, type: c.type, card: c }, () => true);
+      }
       return { ok: true };
     }
 
@@ -2309,6 +2416,16 @@
       const atkDies = atk.defense <= 0;
       if (defDies) this.destroyCard(def, atk, true);
       if (atkDies) this.destroyCard(atk, def, true);
+      // "Becomes Veteran when it survives combat"（HURRICANE Mk II-C TROP）/ "When a friendly unit survives combat"
+      if (!atkDies) {
+        this.fireTrigger('selfSurvive', { uid: atk.uid }, u => u.uid === atk.uid);
+        this.fireTrigger('allySurvive', { uid: atk.uid, owner: atk.owner, type: atk.type, nation: atk.nation, attack: atk.totalAttack, card: atk },
+          u => u.owner === atk.owner && u.uid !== atk.uid);
+      }
+      if (!defDies) {
+        this.fireTrigger('allySurvive', { uid: def.uid, owner: def.owner, type: def.type, nation: def.nation, attack: def.totalAttack, card: def },
+          u => u.owner === def.owner && u.uid !== def.uid);
+      }
       // 攻击伤害同时打到敌方总部（PANTHER D）
       if (!atkDies && dToDef > 0 && atk._splashHq) {
         this.log(`${atk.name} 的攻击伤害同时打到敌方总部（${dToDef}）`);
@@ -2386,6 +2503,12 @@
         for (const cl of cls) {
           if (cl.kind !== 'trigger' || cl.event !== event) continue;
           if (!evalCond(cl.cond, this, u, ctx || {})) continue;
+          if (cl.once) {
+            // 每回合一次的触发（158. NACHSCHUB / 2. MARINE DIVISION 等）
+            const key = '_onceTrig';
+            if (u[key] === this.turn) continue;
+            u[key] = this.turn;
+          }
           this.log(`触发：${u.name}`);
           this.execOps(cl.ops, u, { ...(ctx || {}), trigger: true });
         }
@@ -2562,6 +2685,13 @@
           }
           case 'randomEnemy': { const l = this.unitsOf(foe).filter(u => u.uid !== src.uid); return l.length ? this.rng.pick(l) : null; }
           case 'randomFriendly': { const l = this.unitsOf(me).filter(u => u.uid !== src.uid); return l.length ? this.rng.pick(l) : null; }
+          // 触发事件载荷目标："give it +1+3"（刚部署的单位）/ "Suppress it"（刚被压制的单位）
+          case 'deployed': return (ctx && ctx.card && ctx.card.isUnit) ? ctx.card : null;
+          case 'event': {
+            if (ctx && ctx.card && ctx.card.isUnit) return ctx.card;
+            if (ctx && ctx.uid != null) { const t = this.find(ctx.uid); if (t && t.isUnit) return t; }
+            return null;
+          }
           default: return null;
         }
       };
@@ -2800,8 +2930,13 @@
           break;
         }
         case 'opCostMod': {
-          src._opCostMod = (src._opCostMod || 0) + op.n;
-          this.log(`${src.name} 行动费 ${op.n > 0 ? '+' : ''}${op.n}（当前 ${src.effOpCost}）`);
+          // 触发事件目标："give it ... -1 operation cost"（36. KRADSCHÜTZEN）
+          const t = (op.target === 'deployed' && ctx && ctx.card && ctx.card.isUnit) ? ctx.card
+            : (op.target === 'event' && ctx) ? (ctx.card && ctx.card.isUnit ? ctx.card : (ctx.uid != null ? this.find(ctx.uid) : null))
+            : src;
+          if (!t || !t.isUnit) break;
+          t._opCostMod = (t._opCostMod || 0) + op.n;
+          this.log(`${t.name} 行动费 ${op.n > 0 ? '+' : ''}${op.n}（当前 ${t.effOpCost}）`);
           break;
         }
         case 'dmgMod': {
@@ -2901,6 +3036,7 @@
           }
           this.log(`${src.name} 变形成 ${nd.name}`);
           this.ev({ e: 'veteran', uid: nd.uid, name: nd.name, owner: nd.owner });
+          this.fireTrigger('becomesVeteran', { uid: nd.uid, owner: nd.owner, type: nd.type, nation: nd.nation, card: nd }, () => true);
           break;
         }
         case 'kreditsNextTurn': {
@@ -2980,11 +3116,13 @@
           // 永久提升：上限与当前防御同时 +N（官方 ChangeDefense(location, N, permanent)）
           if (this.hqHealBlocked()) { this.log('总部无法获得防御（效果被阻止）'); break; }
           const p = this.players[me];
+          const n = op.calc ? (this.countOf(op.calc, src, ctx) || 0) : op.n;
+          if (!n) break;
           const bonus = p._hqHealBonus || 0;
-          p.hqMaxDef += op.n;
-          p.hqDef += op.n + bonus;
-          this.log(`我方总部防御 +${op.n}${bonus ? `（加成 +${bonus}）` : ''}`);
-          this.fireTrigger('ownHqHealed', { side: me, amount: op.n }, u => u.owner === me);
+          p.hqMaxDef += n;
+          p.hqDef += n + bonus;
+          this.log(`我方总部防御 +${n}${bonus ? `（加成 +${bonus}）` : ''}`);
+          this.fireTrigger('ownHqHealed', { side: me, amount: n }, u => u.owner === me);
           break;
         }
         case 'hqBuff': {
@@ -3095,19 +3233,28 @@
               t.loc = 'board';
               this.players[t.owner].board.push(t);
               this.log(`${t.name} 撤退`);
+              this.fireTrigger('unitRetreated', { uid: t.uid, owner: t.owner, type: t.type, card: t }, () => true);
             } else this.log(`  ${t.name} cannot retreat (support full)`);
           }
           break;
         }
         case 'pin': {
-          const list = (op.target === 'allEnemyUnits' ? this.unitsOf(foe) : [pickUnit('enemyUnit')].filter(Boolean))
+          const list = (op.target === 'allEnemyUnits' ? this.unitsOf(foe) : op.target === 'event'
+            ? [ctx && ctx.card && ctx.card.isUnit ? ctx.card : (ctx && ctx.uid != null ? this.find(ctx.uid) : null)].filter(Boolean)
+            : [pickUnit('enemyUnit')].filter(Boolean))
             .filter(u => !u._pinImmune);
-          for (const u of list) { u._pinned = true; }
+          // 已钉住的单位不再触发 unitPinned（防 CROMWELL"压制→触发→再压制"死循环）
+          for (const u of list) {
+            const was = u._pinned;
+            u._pinned = true;
+            if (!was) this.fireTrigger('unitPinned', { uid: u.uid, owner: u.owner, type: u.type, card: u }, () => true);
+          }
           this.log(`压制了 ${list.length} 个单位`);
           break;
         }
         case 'destroy': {
           if (op.target === 'allEnemyUnits') { for (const u of [...this.unitsOf(foe)]) this.destroyCard(u, src); break; }
+          if (op.target === 'selfUnit') { this.destroyCard(src, src); this.log(`${src.name} 被自身效果摧毁`); break; }
           const t = pickUnit('enemyUnit');
           if (t) { this.destroyCard(t, src); this.log(`${t.name} 被效果摧毁`); }
           break;
@@ -3181,6 +3328,8 @@
               else { const b = this.players[src.owner].board; const i = b.indexOf(src); if (i >= 0) b[i] = nc; }
               this.log(`${src.name} 晋升为老兵（${nc.name}）`);
               this.ev({ e: 'veteran', uid: src.uid, name: nc.name, owner: src.owner });
+              // "When this/a unit becomes Veteran, ..."（22nd GUARDS / 64. PANZERGRENADIER / GREEN HOWARDS）
+              this.fireTrigger('becomesVeteran', { uid: nc.uid, owner: nc.owner, type: nc.type, nation: nc.nation, card: nc }, () => true);
               break;
             }
           }
