@@ -51,7 +51,8 @@ function check(name, ok, extra) { results.push({ name, ok: !!ok, extra }); }
 // 4. TYPE 89：总部获得防御 → 改为受到等量伤害
 {
   const g = mk(); const u = put(g, 'card_unit_type_89');
-  u._parsed = E.parseClauses(u.text); g.execCardText(u, 'static', {});
+  u._parsed = E.parseClauses(u.text);
+  for (const cl of u._parsed) if (cl.ops.some(o => o.op === 'hqHealToDamage')) g.execOps(cl.ops, u, {});
   const h0 = g.players[0].hqDef;
   g.execOp({ op: 'hqDef', n: 3 }, u, {});
   check('TYPE 89 总部回血转为受伤', g.players[0].hqDef <= h0, `${h0}->${g.players[0].hqDef}`);
@@ -139,6 +140,78 @@ function check(name, ok, extra) { results.push({ name, ok: !!ok, extra }); }
     if (k._extraDmgMax) extra = true;
   }
   check('KATYUSHA 攻击额外伤害', extra, '');
+}
+
+// 14. M4 FIREFLY PL：友军被攻击前 +1+1
+{
+  const g = mk(); g.current = 1; put(g, 'card_unit_sherman_firefly_pl');
+  const ally = put(g, FILL[1].id);
+  ally.loc = 'front'; ally.defense = 20;
+  const bi = g.players[0].board.indexOf(ally); if (bi >= 0) g.players[0].board.splice(bi, 1);
+  g.frontline.push(ally); g.frontlineOwner = 0;
+  const raider = put(g, FILL[2].id, 1); raider.loc = 'front'; raider.summonedTurn = -1; raider.hasAttacked = false; raider.attacksLeft = 1; raider.buffAttack += 3;
+  g.frontline.push(raider);
+  const b0 = ally.buffAttack;
+  g.attack(1, raider.uid, ally.uid);
+  check('M4 FIREFLY 友军被攻击前 +1+1', ally.buffAttack > b0, `${b0}->${ally.buffAttack}`);
+}
+// 15. BM-13N US6：被攻击时先撤退（不受伤害）
+{
+  const g = mk(); g.current = 1; const bm = put(g, 'card_unit_bm_13n_us6');
+  bm._parsed = E.parseClauses(bm.text); g.execCardText(bm, 'static', {});
+  bm.loc = 'front'; bm.defense = 3;
+  const bi = g.players[0].board.indexOf(bm); if (bi >= 0) g.players[0].board.splice(bi, 1);
+  g.frontline.push(bm); g.frontlineOwner = 0;
+  const raider = put(g, FILL[2].id, 1); raider.loc = 'front'; raider.summonedTurn = -1; raider.hasAttacked = false; raider.attacksLeft = 1; raider.buffAttack += 5;
+  g.frontline.push(raider);
+  g.attack(1, raider.uid, bm.uid);
+  check('BM-13N 被攻击时先撤退', bm.loc === 'board' && bm.defense === 3, `loc=${bm.loc} def=${bm.defense}`);
+}
+// 16. METEOR：攻击后移除并洗入双倍复制
+{
+  const g = mk(); const m = put(g, 'card_unit_meteor');
+  m.loc = 'front'; m.summonedTurn = -1; m.hasAttacked = false; m.attacksLeft = 1;
+  const bi = g.players[0].board.indexOf(m); if (bi >= 0) g.players[0].board.splice(bi, 1);
+  g.frontline.push(m); g.frontlineOwner = 0;
+  const foe = put(g, FILL[2].id, 1); foe.defense = 20;
+  m._parsed = E.parseClauses(m.text); g.execCardText(m, 'static', {});
+  g.attack(0, m.uid, foe.uid);
+  const copy = g.players[0].deck.find(c => c.id === 'card_unit_meteor');
+  check('METEOR 攻击后移除并洗入双倍复制', !g.unitsOf(0).some(u => u.uid === m.uid) && !!copy,
+    copy ? `copy ${copy.totalAttack}/${copy.totalDefense}` : 'no copy');
+}
+// 17. ROYAL FUSILIERS：下达指令后攻/行动费互换
+{
+  const g = mk(); const u = put(g, 'card_unit_royal_fusiliers');
+  u._parsed = E.parseClauses(u.text);
+  const atk0 = u.totalAttack, op0 = u.effOpCost;
+  g.fireTrigger('ownOrder', { side: 0 }, x => x.owner === 0);
+  check('ROYAL FUSILIERS 攻/行动费互换', u.totalAttack !== atk0 && u.effOpCost !== op0, `攻 ${atk0}->${u.totalAttack} 行动 ${op0}->${u.effOpCost}`);
+}
+// 18. LIGHT DETACHMENT 15：更强单位部署 → +1 攻
+{
+  const g = mk(); const u = put(g, 'card_unit_light_detachment_15');
+  u._parsed = E.parseClauses(u.text);
+  { const small = new E.CardInst(FILL[0], 0, g); small.loc = 'hand'; g.players[0].hand.push(small); g.playCard(0, g.players[0].hand.indexOf(small), {}); }
+  const big = db.cards.find(c => c.type === 'infantry' && (c.attack || 0) >= 5);
+  const b0 = u.buffAttack;
+  if (big) {
+    const inst = new E.CardInst(big, 0, g); inst.loc = 'hand'; g.players[0].hand.push(inst);
+    g.playCard(0, g.players[0].hand.indexOf(inst), {});
+  }
+  check('LIGHT DETACHMENT 更强单位部署 +1 攻', u.buffAttack > b0, `${b0}->${u.buffAttack}`);
+}
+// 19. GRUMMAN GOOSE：敌方总部被攻击 → 抽牌
+{
+  const g = mk(); const u = put(g, 'card_unit_grumman_goose');
+  u._parsed = E.parseClauses(u.text); g.execCardText(u, 'trigger', {});
+  if (!u._drawOnEnemyHqAttacked) u._drawOnEnemyHqAttacked = g.turn + 1;
+  const h0 = g.players[0].hand.length;
+  const atk = put(g, FILL[2].id); atk.loc = 'front'; atk.summonedTurn = -1; atk.buffAttack += 3;
+  const bi = g.players[0].board.indexOf(atk); if (bi >= 0) g.players[0].board.splice(bi, 1);
+  g.frontline.push(atk); g.frontlineOwner = 0;
+  g.attack(0, atk.uid, 0);
+  check('GRUMMAN GOOSE 敌方总部被攻击抽牌', g.players[0].hand.length > h0, `${h0}->${g.players[0].hand.length}`);
 }
 
 const pass = results.filter(r => r.ok).length;

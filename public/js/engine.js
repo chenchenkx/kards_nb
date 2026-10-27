@@ -388,10 +388,27 @@
     'you attack with an?',
     'you deploy a (?:tank|infantry|artillery|fighter|bomber) with \\d+ or more attack',
     'you (?:deploy or add|add or deploy) a .* tank',
+    'friendly unit is attacked',
+    'this unit is attacked',
+    'unit with higher attack is deployed',
+    'enemy hq is attacked',
+    'when a hq gains? (?:defense|defence)',
   ].join('|'), 'i');
 
   function parseOps(s) {
     let t0 = String(s || '').replace(/[\u2019\u2018]/g, "'").trim();
+
+    // 先于触发门的"自身被动"（句子含 after/when 但本质是自身效果）
+    if (/^remove after this unit attacks/i.test(t0)) {
+      return [{ op: 'removeAfterAttack', copyDouble: /double attack and defense/i.test(t0) }];
+    }
+    if (/retreat this unit before damage is applied/i.test(t0)) {
+      return [{ op: 'retreatBeforeDamage' }];
+    }
+    // TYPE 89 属于持续被动（总部回血改为受伤），不能被当成触发一次性执行
+    if (/when a hq gains? (?:defense|defence), it takes that much damage instead/i.test(t0)) {
+      return [{ op: 'hqHealToDamage' }];
+    }
 
     // 引号授予型：优先识别 **亡计授予**（"Your units get: "Destruction: Draw a card.""），
     // 这是可实现的能力授予；其余引号能力（持续光环/触发链）暂不结算。
@@ -540,7 +557,7 @@
       }
     }
     let ops;
-    if (cond === null && /\bwhen\b/i.test(t0) && TRIGGER_EVENT_RE.test(t0)) {
+    if (cond === null && /\b(when|whenever|after)\b/i.test(t0) && TRIGGER_EVENT_RE.test(t0)) {
       ops = [];                              // 让路给触发句解析
     } else {
       ops = parseOpsRaw(t0, String(s || ''));
@@ -979,6 +996,25 @@
     // "Distribute 3 damage between random enemies."（LONG TOM）
     m = /distribute (\d+) damage (?:between|among) (?:random )?enemies/i.exec(t);
     if (m) { ops.push({ op: 'distributeOnAttack', n: +m[1] }); return ops; }
+
+    // "When a friendly unit is attacked, give it +1+1 before damage."（M4 FIREFLY PL）
+    if (/when a friendly unit is attacked, give it \+(\d+)\+?(\d+)?/i.test(t)) {
+      const mm = /give it \+(\d+)\+?(\d+)?/i.exec(t);
+      ops.push({ op: 'buffAttackedAlly', a: +mm[1], d: +(mm[2] || mm[1]) }); return ops;
+    }
+    // "Retreat this unit before damage is applied when it is attacked."（BM-13N US6）
+    if (/retreat this unit before damage is applied/i.test(t)) { ops.push({ op: 'retreatBeforeDamage' }); return ops; }
+    // "Reveal: When the enemy HQ is attacked this turn, draw a card."（GRUMMAN GOOSE）
+    if (/when the enemy hq is attacked this turn, draw a card/i.test(t)) { ops.push({ op: 'drawOnEnemyHqAttacked' }); return ops; }
+    // "After you give an order, swap the attack and operation cost of this unit."（ROYAL FUSILIERS）
+    if (/swap the attack and operation cost of this unit/i.test(t)) { ops.push({ op: 'swapAtkOpCost' }); return ops; }
+    // "Remove after this unit attacks. Add a copy to your deck with double attack and defense."（METEOR）
+    if (/remove after this unit attacks/i.test(t)) { ops.push({ op: 'removeAfterAttack', copyDouble: /double attack and defense/i.test(t) }); return ops; }
+    // "Gets +1 attack when a unit with higher attack is deployed."（LIGHT DETACHMENT 15）
+    m = /gets? \+(\d+) attack when a unit with higher attack is deployed/i.exec(t);
+    if (m) { ops.push({ op: 'buffWhenBiggerDeployed', n: +m[1] }); return ops; }
+    // "Trigger a non-targeted deployment effect on a friendly unit."（SAVOIA-MARCHETTI SM.79）
+    if (/trigger a non-targeted deployment effect on a friendly unit/i.test(t)) { ops.push({ op: 'triggerDeployOnAlly' }); return ops; }
 
     // ================= 钳形附加效果（v44 第四批） =================
     if (/damage dealt to this unit is dealt to its pincer partner instead/i.test(t)) { ops.push({ op: 'pincerRedirect' }); return ops; }
@@ -1916,6 +1952,11 @@
     { re: /this unit attacks?\b/i, ev: 'selfAttack' },
     // v48：被敌方攻击 / 被敌方指定 / 我方以特定单位攻击
     { re: /(?:the )?enemy attacks? (?:it|this unit)\b/i, ev: 'selfAttacked' },
+    { re: /a friendly unit is attacked\b/i, ev: 'allyAttacked' },
+    { re: /(?:this unit|it) is attacked\b/i, ev: 'selfAttacked' },
+    { re: /(?:the )?enemy hq is attacked\b/i, ev: 'enemyHqAttacked' },
+    { re: /a unit with higher attack is deployed\b/i, ev: 'ownDeploy' },
+    { re: /a hq gains? (?:defense|defence)\b/i, ev: 'ownHqHealed' },
     { re: /(?:the )?enemy targets? (?:or attacks? )?(?:it|this unit)\b/i, ev: 'selfAttacked' },
     { re: /this unit is targeted by (?:an? )?enemy/i, ev: 'selfAttacked' },
     { re: /you attack with an? (german|soviet|american|british|japanese|french|italian|polish|finnish) (tank|infantry|artillery|fighter|bomber)\b/i,
@@ -2013,6 +2054,13 @@
   function buildTrigger(event, cond, effectText, raw) {
     const eff = String(effectText || '').replace(/^[,:;]\s*/, '').trim();
     if (!eff) return null;
+    // "Gets +N attack when a unit with higher attack is deployed."（LIGHT DETACHMENT 15）
+    {
+      const bw = /^gets? \+(\d+) attack$/i.exec(eff);
+      if (bw && /unit with higher attack is deployed/i.test(raw)) {
+        return { kind: 'trigger', event, when: raw, text: raw, cond: cond || null, ops: [{ op: 'buffWhenBiggerDeployed', n: +bw[1] }] };
+      }
+    }
     let ops = parseOps(eff);
     if (!ops.length) ops = parseTurnEffect(eff);
     if (!ops.length) ops = parseOps(eff.replace(/^[a-z0-9 .'\-]+?\s+(?=gets?|gains?|deals?|destroys?|draws?)/i, ''));
@@ -2030,7 +2078,7 @@
     const once = /^once per turn\b/i.test(String(raw || ''));
     // 触发效果里没写明目标时，增益类默认作用于自身；伤害/摧毁类保持通用目标解析
     const isDeployEv = /^(ownDeploy|ownGuardDeploy)$/.test(event);
-    const isEventEv = /^(unitPinned|unitRetreated|unitDestroyed|allyMoveFront|enemyMoveFront)$/.test(event);
+    const isEventEv = /^(unitPinned|unitRetreated|unitDestroyed|allyMoveFront|enemyMoveFront|allyAttacked|selfAttacked|enemyHqAttacked)$/.test(event);
     for (const o of ops) {
       if (!['buff', 'keyword', 'buffPer', 'opCostMod'].includes(o.op)) continue;
       if (isDeployEv && /^(give it|it gets|gets|it gains)\b/i.test(eff)) { o.target = 'deployed'; o.self = false; continue; }
@@ -2877,6 +2925,13 @@
         this.sortBoard(p.board);
         this.log(`${c.name} 部署至支援阵线`);
         if (c.has && c.has('exile')) p._exilePlayedTurn = this.turn;
+        // "Gets +1 attack when a unit with higher attack is deployed."（LIGHT DETACHMENT 15）
+        for (const u of this.unitsOf(side)) {
+          if (u._buffWhenBigger && u.uid !== c.uid && c.totalAttack > u.totalAttack) {
+            u.buffAttack += u._buffWhenBigger;
+            this.log(`${u.name} +${u._buffWhenBigger} 攻击（更强单位部署）`);
+          }
+        }
         // "Units deployed by the enemy have +2 operation cost."（P-40 N-5）
         const opTax = this.players[1 - side]._enemyDeployOpCost || 0;
         if (opTax) { c._opCostMod = (c._opCostMod || 0) + opTax; this.log(`${c.name} 行动费 +${opTax}（敌方光环）`); }
@@ -3125,6 +3180,10 @@
         this.ev({ e: 'hqdamage', side: 1 - side, amount: hqDmg });
         this.fireTrigger('selfAttack', { uid: atk.uid }, u => u.uid === atk.uid);
         this.fireTrigger('selfAttackHQ', { uid: atk.uid }, u => u.uid === atk.uid);
+        // "When the enemy HQ is attacked this turn, draw a card."（GRUMMAN GOOSE）
+        for (const u of this.unitsOf(side)) {
+          if (u._drawOnEnemyHqAttacked && u._drawOnEnemyHqAttacked > this.turn) { this.draw(side, 1, true); this.log(`${u.name}：敌方总部被攻击，抽一张`); }
+        }
         return { ok: true };
       }
       const def = this.find(targetUid);
@@ -3215,6 +3274,18 @@
         }
         return { ok: true };
       }
+      // "When a friendly unit is attacked, give it +1+1 before damage."（M4 FIREFLY PL）
+      this.fireTrigger('allyAttacked', { uid: def.uid, owner: def.owner, card: def, type: def.type },
+        u => u.owner === def.owner && u.uid !== def.uid);
+      // "Retreat this unit before damage is applied when it is attacked."（BM-13N US6）
+      if (def._retreatBeforeDamage && this.supportCount(def.owner) < RULES.MAX_ROW) {
+        this.log(`${def.name} 在受伤前撤退`);
+        this.frontline.splice(this.frontline.indexOf(def), 1);
+        if (!this.frontline.length) this.frontlineOwner = -1;
+        def.loc = 'board'; this.players[def.owner].board.push(def);
+        this.fireTrigger('unitRetreated', { uid: def.uid, owner: def.owner, type: def.type, card: def }, () => true);
+        return { ok: true };
+      }
       const defBefore = def.defense;
       const dToDef = dmg(atk, def, atkSilenced);
       let dToAtk = 0;
@@ -3293,6 +3364,17 @@
             }
           }
         }
+      }
+      // "Remove after this unit attacks. Add a copy to your deck with double attack and defense."（METEOR）
+      if (atk._removeAfterAttack && atk.loc !== 'discard') {
+        const def0 = atk.def;
+        this.destroyCard(atk, null);
+        const nc = new CardInst(def0, atk.owner, this);
+        if (atk._removeAfterAttack.copyDouble) { nc.buffAttack += nc.attack || 0; nc.buffDefense += nc.defense || 0; }
+        nc.loc = 'deck';
+        this.players[atk.owner].deck.push(nc);
+        this.rng.shuffle(this.players[atk.owner].deck);
+        this.log(`${atk.name} 攻击后被移除，双倍复制洗入牌库`);
       }
       // 每次攻击后行动费 +N（BF 110 C / PANZER IV-J）
       if (atk._opCostOnAttack) {
@@ -5172,6 +5254,51 @@
           nc.loc = 'hand';
           ep2.hand[i2] = nc;
           this.log(`敌方手牌 ${old2.name} 变为 ${nc.name}`);
+          break;
+        }
+        case 'buffAttackedAlly': {
+          // 被攻击的友军获得 +1+1（伤害结算前）
+          const t2 = (ctx && ctx.card && ctx.card.isUnit) ? ctx.card : null;
+          if (t2) { t2.buffAttack += op.a || 1; t2.buffDefense += op.d || 1; this.log(`${t2.name} 被攻击前获得 +${op.a}/+${op.d}`); }
+          break;
+        }
+        case 'retreatBeforeDamage': {
+          src._retreatBeforeDamage = true;
+          break;
+        }
+        case 'drawOnEnemyHqAttacked': {
+          src._drawOnEnemyHqAttacked = this.turn + 1;
+          break;
+        }
+        case 'swapAtkOpCost': {
+          const a0 = src.buffAttack, o0 = src._opCostMod || 0;
+          const totalAtk = src.totalAttack;
+          src.buffAttack += (src.opCost || 0) - totalAtk;
+          src._opCostMod = o0 + totalAtk - (src.opCost || 0);
+          this.log(`${src.name} 攻击力与行动费互换（攻 ${src.totalAttack} / 行动 ${src.effOpCost}）`);
+          break;
+        }
+        case 'removeAfterAttack': {
+          src._removeAfterAttack = { copyDouble: !!op.copyDouble };
+          break;
+        }
+        case 'buffWhenBiggerDeployed': {
+          src._buffWhenBigger = op.n || 1;
+          break;
+        }
+        case 'triggerDeployOnAlly': {
+          // 触发某个友方单位的"非指向部署效果"
+          const allies = this.unitsOf(me).filter(u => u.uid !== src.uid);
+          const t3 = allies.length ? this.rng.pick(allies) : null;
+          if (!t3) break;
+          const cls = t3._parsed || (t3._parsed = parseClauses(t3.text));
+          let ran = 0;
+          for (const cl of cls) {
+            if (cl.kind !== 'deployment') continue;
+            if ((cl.ops || []).some(o => ['unit', 'enemyUnit', 'friendlyUnit', 'typedUnit'].includes(o.target))) continue;
+            this.execOps(cl.ops, t3, { trigger: true }); ran++;
+          }
+          this.log(`触发了 ${t3.name} 的 ${ran} 个非指向部署效果`);
           break;
         }
         case 'fightRandom': {
