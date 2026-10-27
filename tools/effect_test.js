@@ -217,5 +217,70 @@ function deploy(g, side, def, opts) {
   }
 }
 
+
+// 8) 二选一：人类挂起等待、两个分支各自生效、AI 自动取第一项
+{
+  const ce = cards.find(c => /choose one\s*-\s*.*\bOR\b/i.test(c.text || '') && c.type === 'order');
+  console.log('\n[8]', ce && ce.name, ':', ce && ce.text);
+  if (ce) {
+    // (a) 人类：挂起，且不执行任何分支
+    const g = game();
+    g.humanSides = [true, false];
+    const oc = new Engine.CardInst(ce, 0, g);
+    oc.loc = 'hand'; g.players[0].hand.push(oc); g.players[0].kredits = 12;
+    const foe = put(g, 1, pick('infantry'));
+    foe.defense = 9;
+    const defBefore = foe.defense;
+    g.playCard(0, g.players[0].hand.indexOf(oc), {});
+    check('人类打出 choose 后挂起等待', !!g.pendingChoose, { pc: g.pendingChoose && g.pendingChoose.options.length });
+    check('挂起时选项为 2 个', g.pendingChoose && g.pendingChoose.options.length === 2, null);
+    check('挂起时尚未结算任何分支', foe.defense === defBefore, { now: foe.defense, before: defBefore });
+
+    // 挂起期间其它操作被拒绝
+    const kBefore = g.players[0].kredits;
+    const rPlay = g.playCard(0, 0, {});
+    check('挂起期间禁止出牌', !rPlay.ok, rPlay.error);
+    check('挂起期间禁止结束回合', (() => { const c = g.current; g.endTurn(); return g.current === c; })(), null);
+
+    // (b) 选择第 2 个分支
+    const idx2 = 1;
+    const hqBefore = g.players[1].hqDef;
+    const r = g.resolveChoose(0, idx2);
+    check('resolveChoose 返回成功', r.ok, r);
+    check('选择后挂起解除', !g.pendingChoose, null);
+    check('所选分支确实结算了',
+      foe.defense !== defBefore || g.players[1].hqDef !== hqBefore ||
+      g.players[0].hand.length !== 0 || g.players[0].discard.length > 0, null);
+
+    // (c) 错误座位不能替人选择
+    const g3 = game();
+    g3.humanSides = [true, false];
+    const oc3 = new Engine.CardInst(ce, 0, g3);
+    oc3.loc = 'hand'; g3.players[0].hand.push(oc3); g3.players[0].kredits = 12;
+    g3.playCard(0, g3.players[0].hand.indexOf(oc3), {});
+    const rBad = g3.resolveChoose(1, 0);
+    check('对手不能代选', !rBad.ok, rBad.error);
+    g3.resolveChoose(0, 0);
+
+    // (d) AI：不挂起，直接结算第一项
+    const g4 = game();
+    g4.humanSides = [false, false];
+    const oc4 = new Engine.CardInst(ce, 0, g4);
+    oc4.loc = 'hand'; g4.players[0].hand.push(oc4); g4.players[0].kredits = 12;
+    g4.playCard(0, g4.players[0].hand.indexOf(oc4), {});
+    check('AI 自动选择，不挂起', !g4.pendingChoose, null);
+
+    // (e) 视图隔离：只有选择方能拿到选项文本
+    const g5 = game();
+    g5.humanSides = [true, false];
+    const oc5 = new Engine.CardInst(ce, 0, g5);
+    oc5.loc = 'hand'; g5.players[0].hand.push(oc5); g5.players[0].kredits = 12;
+    g5.playCard(0, g5.players[0].hand.indexOf(oc5), {});
+    const v0 = g5.viewFor(0), v1 = g5.viewFor(1);
+    check('选择方视图含选项', v0.pendingChoose && v0.pendingChoose.options.length === 2, null);
+    check('对手视图不含选项文本', v1.pendingChoose && v1.pendingChoose.options.length === 0, null);
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

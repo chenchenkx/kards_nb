@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KARDS 网页版 - 二战卡牌游戏</title>
-<link rel="stylesheet" href="css/kards.css?v=24">
+<link rel="stylesheet" href="css/kards.css?v=26">
 <link rel="preload" href="data/cards.json" as="fetch" crossorigin>
 </head>
 <body>
@@ -48,7 +48,7 @@
     </div>
     <div class="start-lan" id="lan-info"></div>
     <div class="start-footer">
-      <span id="card-count-label"></span> · 玩家自制网页致敬版 · 与 1939 Games 官方无关 · <b style="color:#e8c96a">构建 v24</b>
+      <span id="card-count-label"></span> · 玩家自制网页致敬版 · 与 1939 Games 官方无关 · <b style="color:#e8c96a">构建 v26</b>
     </div>
   </div>
 </div>
@@ -154,6 +154,15 @@
     <div id="log-panel" class="log-panel"></div>
     <div id="target-hint" class="target-hint hidden">选择目标</div>
 
+    <!-- 二选一（Choose one） -->
+    <div id="choose-modal" class="modal hidden">
+      <div class="modal-box choose-box">
+        <div class="choose-title">选择一项</div>
+        <div class="choose-sub" id="choose-sub">这张卡有两种效果，选择其中一个结算</div>
+        <div class="choose-options" id="choose-options"></div>
+      </div>
+    </div>
+
     <div id="gameover-modal" class="modal hidden">
       <div class="modal-box gameover-box">
         <div class="gameover-title" id="gameover-title">胜利</div>
@@ -194,12 +203,12 @@
 <!-- card detail popup -->
 <div id="card-popup" class="card-popup hidden"></div>
 
-<script src="js/vendor/gsap.min.js?v=24"></script>
-<script src="js/engine.js?v=24"></script>
-<script src="js/ai.js?v=24"></script>
-<script src="js/net.js?v=24"></script>
-<script src="js/sfx.js?v=24"></script>
-<script src="js/ui.js?v=24"></script>
-<script src="js/main.js?v=24"></script>
+<script src="js/vendor/gsap.min.js?v=26"></script>
+<script src="js/engine.js?v=26"></script>
+<script src="js/ai.js?v=26"></script>
+<script src="js/net.js?v=26"></script>
+<script src="js/sfx.js?v=26"></script>
+<script src="js/ui.js?v=26"></script>
+<script src="js/main.js?v=26"></script>
 </body>
 </html>

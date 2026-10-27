@@ -70,7 +70,10 @@ function deployTest(name, cardDef, fn) {
 console.log('=== blitz tests ===');
 if (BLITZ_INF) {
   const { g, c } = deployTest('blitz', BLITZ_INF, null);
-  check('blitz unit deploys to frontline', !!c && c.loc === 'front');
+  // 开局前线中立，只能先落支援阵线（2026-10 规则修复）
+  check('blitz unit deploys to support line at game start', !!c && c.loc === 'board');
+  const blitzPush = g.move(0, c.uid, true);
+  check('blitz unit can push to frontline on deploy turn', blitzPush.ok && c.loc === 'front', blitzPush);
   check('blitz unit can attack on deploy turn', g.canAttack(c) === true || g.attackTargets(c).length > 0);
   // enemy unit in support for a target
   const e = new Engine.CardInst(INF, 1, g);
@@ -86,7 +89,7 @@ if (INF) {
   check('non-blitz unit cannot attack on deploy turn', g.canAttack(c) === false);
   // next turn
   g.endTurn(); g.endTurn();
-  check('non-blitz unit can move next turn', g.canMove(c, false) === true);
+  check('non-blitz unit can push to frontline next turn', g.canMove(c, true) === true);
 }
 
 console.log('=== tank move+attack ===');
@@ -163,6 +166,11 @@ console.log('=== frontline control ===');
   const u1 = new Engine.CardInst(INF, 0, g); u1.loc = 'hand'; p1.hand.push(u1);
   p1.kredits = 12;
   g.playCard(0, 0, {});
+  // 开局只能部署到支援阵线，必须再花钱推进才能夺取前线
+  const first = g.players[0].board[0];
+  first.summonedTurn = -1; first.hasAttacked = false; first.hasMoved = false; first.hasActed = false;
+  g.current = 0;
+  g.move(0, first.uid, true);
   check('first unit to frontline takes control', g.frontlineOwner === 0);
   // P2 cannot enter frontline
   const p2 = g.players[1];
@@ -346,8 +354,16 @@ console.log('=== conditional / trigger keywords (playtest report gaps) ===');
   {
     const g = mkGame(rigged(idHud), rigged(FILLER[0], 2));
     playFromHand(g, 0, idHud, { toFront: true });
+    // 开局前线中立 → 先落支援阵线，再推进
+    const hudInst = g.players[0].board.find(c => c.id === idHud) || g.frontline.find(c => c.id === idHud);
+    if (hudInst) {
+      hudInst.summonedTurn = -1; hudInst.hasAttacked = false; hudInst.hasMoved = false; hudInst.hasActed = false;
+      g.players[0].kredits = 12;
+      g.current = 0;
+      g.move(0, hudInst.uid, true);
+    }
     const hud = g.frontline.find(c => c.id === idHud);
-    check('HUDSON deployed to frontline', !!hud);
+    check('HUDSON deployed and pushed to frontline', !!hud, { loc: hudInst && hudInst.loc });
     if (hud) {
       // 需要过一回合才能攻击（召唤失调）
       g.players[0].kredits = 12;
@@ -412,6 +428,76 @@ console.log('=== conditional / trigger keywords (playtest report gaps) ===');
       g.endTurn(); g.endTurn();   // 过一个整回合
       check('DEPTH CHARGES: expires after your next turn', !g.hqHas(0, 'smokescreen'));
     }
+  }
+}
+
+
+// ================= 阵线规则（2026-10 修复） =================
+{
+  const mkGame = () => {
+    const fill = db.deckPool.filter(c => c.type === 'infantry' && !c.text).slice(0, 4).map(c => c.id);
+    const deck = [];
+    for (let i = 0; i < 39; i++) deck.push(fill[i % fill.length]);
+    return new Engine.Game({ db, seed: 21, decks: [deck, deck.slice()], hqs: [db.hqs.Germany, db.hqs.Soviet] });
+  };
+  const put = (g, side, def, loc) => {
+    const u = new Engine.CardInst(def, side, g);
+    u.loc = loc; u.summonedTurn = -1; u.hasAttacked = false; u.hasMoved = false; u.hasActed = false;
+    if (loc === 'front') g.frontline.push(u); else g.players[side].board.push(u);
+    return u;
+  };
+  const filler = db.deckPool.filter(c => c.type === 'infantry' && !c.text);
+  const deployAt = (g, side, toFront) => {
+    const inst = new Engine.CardInst(filler[0], side, g);
+    inst.loc = 'hand';
+    g.players[side].hand.push(inst);
+    g.players[side].kredits = 20;
+    g.players[side].slots = 20;
+    const prev = g.current; g.current = side;
+    g.playCard(side, g.players[side].hand.indexOf(inst), { toFront });
+    g.current = prev;
+    return inst;
+  };
+
+  // 开局前线中立：不能直接部署到前线
+  {
+    const g = mkGame();
+    check('开局前线为中立', g.frontlineOwner === -1, g.frontlineOwner);
+    const u = deployAt(g, 0, true);
+    check('开局不能直接部署到前线（落支援阵线）', u.loc === 'board', { loc: u.loc });
+    check('开局前线仍为空', g.frontline.length === 0, g.frontline.length);
+  }
+
+  // 推进并夺取前线后，可以直接部署到前线
+  {
+    const g = mkGame();
+    const u = deployAt(g, 0, true);
+    u.summonedTurn = -1; u.hasAttacked = false; u.hasMoved = false; u.hasActed = false;
+    g.current = 0;
+    const mv = g.move(0, u.uid, true);
+    check('单位可以推进到中立前线', mv.ok, mv);
+    check('推进后由我方控制前线', g.frontlineOwner === 0, g.frontlineOwner);
+    const v = deployAt(g, 0, true);
+    check('控制前线后可以直接部署到前线', v.loc === 'front', { loc: v.loc });
+  }
+
+  // 飞机 / 火炮可越过敌方前线打支援阵线
+  {
+    const types = ['infantry', 'tank', 'artillery', 'fighter', 'bomber'];
+    const results = {};
+    for (const ty of types) {
+      const g = mkGame();
+      put(g, 1, filler[0], 'front');
+      g.frontlineOwner = 1;
+      const back = put(g, 1, filler[1], 'board');
+      const atk = put(g, 0, filler[0], 'front');
+      atk.type = ty;
+      atk.range = (ty === 'artillery' || ty === 'fighter' || ty === 'bomber') ? 2 : 1;
+      results[ty] = g.attackTargets(atk).includes(back.uid);
+    }
+    check('飞机可越过敌方前线攻击支援阵线', results.fighter && results.bomber, results);
+    check('火炮（射程 2）可越过敌方前线攻击支援阵线', results.artillery, results);
+    check('步兵/坦克不能越过敌方前线', !results.infantry && !results.tank, results);
   }
 }
 

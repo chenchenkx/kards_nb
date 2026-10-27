@@ -612,6 +612,7 @@
     });
     App.netGame = false;
     App.mySeat = 0;
+    App.engine.humanSides = [true, false];   // 玩家手动二选一，AI 自动选第一项
     UI.engine = App.engine;
     UI.onAction = (type, payload) => handleLocalAction(type, payload);
     g_drainOpening(App.engine);
@@ -687,13 +688,26 @@
   function handleLocalAction(type, payload) {
     // 联机：所有操作交给服务器裁决，本地不做任何模拟
     if (App.netGame) {
+      if (type === 'choose') { Net.action('choose', payload || {}); return; }
       if (App.busy) { UI.hint('正在结算，稍候…', 1200); return; }
       if (type === 'endTurn') { requestEndTurn(); return; }
       Net.action(type, payload || {});
       return;
     }
     const g = App.engine;
-    if (!g || g.done || g.current !== 0 || App.busy) return;
+    if (!g || g.done) return;
+
+    // 二选一：即使还在播放动画也必须立刻可点，否则会一直卡住
+    if (type === 'choose') {
+      const r = g.resolveChoose(0, payload && payload.index);
+      if (!r.ok) { UI.logLine('⚠ ' + (r.error || '选择失败')); return; }
+      const evs = g.drainEvents();
+      renderAll();
+      if (evs.length) UI.playEvents(evs, () => { renderAll(); checkEnd(); });
+      return;
+    }
+
+    if (g.current !== 0 || App.busy) return;
     let res = { ok: false };
     try {
       if (type === 'play') res = g.playCard(0, payload.handIndex, { target: payload.target, toFront: payload.toFront, slot: payload.slot });

@@ -309,6 +309,55 @@
 
   function parseOps(s) {
     let t0 = String(s || '').replace(/[\u2019\u2018]/g, "'").trim();
+
+    // ---- 二选一必须最先处理 ----
+    // 否则 "Choose one - add X to your hand OR add Y to your hand" 会被
+    // 后半段的 "add … to your hand" 模式截走，只剩一半效果。
+    const chm = /^choose\s*(?:one|1)\s*(?:[-\u2013:]\s*)?(.+)$/i.exec(t0);
+    if (chm) {
+      const body = chm[1].trim();
+      // 官方用大写 OR 分隔；个别卡写小写 or
+      let parts = body.split(/\s+OR\s+/);
+      if (parts.length !== 2) parts = body.split(/\s+or\s+/i);
+      if (parts.length === 2) {
+        const clean = (txt) => String(txt).trim().replace(/[.。]$/, '');
+        const a = clean(parts[0]), b = clean(parts[1]);
+        let oa = parseOps(a), ob = parseOps(b);
+        // 官方写法常省略重复成分："shuffle A OR B into your deck" / "Deal 5 damage to all ground units OR air units"
+        if (!oa.length || !ob.length) {
+          const verb = /^(shuffle|add|deal|give|draw|destroy|remove|gain|set|repair|discard|put|return)\b\s*/i.exec(a);
+          const tailRx = /((?:to|into|from)\s+(?:your|the|owner's)?\s*(?:hand|deck|play|battlefield)[a-z ]*)$/i;
+          const tA = tailRx.exec(a), tB = tailRx.exec(b);
+          if (!ob.length && verb && !new RegExp('^' + verb[1], 'i').test(b)) {
+            const b2 = verb[1] + ' ' + b;
+            const o2 = parseOps(b2);
+            if (o2.length) { ob = o2; parts[1] = b2; }
+          }
+          if (!ob.length && tA) {
+            const b2 = b + ' ' + tA[1];
+            const o2 = parseOps(b2);
+            if (o2.length) { ob = o2; parts[1] = b2; }
+          }
+          if (!oa.length && tB) {
+            const a2 = a + ' ' + tB[1];
+            const o2 = parseOps(a2);
+            if (o2.length) { oa = o2; parts[0] = a2; }
+          }
+          if (!oa.length && verb) {
+            const a2 = verb[1] + ' ' + a;
+            const o2 = parseOps(a2);
+            if (o2.length) { oa = o2; parts[0] = a2; }
+          }
+        }
+        if (oa.length && ob.length) {
+          return [{ op: 'choose', options: [
+            { text: clean(parts[0]), ops: oa },
+            { text: clean(parts[1]), ops: ob },
+          ] }];
+        }
+      }
+    }
+
     let cond = null;
     if (/\bif\b/i.test(t0)) {
       const parts = t0.split(/\bif\b/i);
@@ -829,13 +878,6 @@
     // "Reduce the cost of all orders in your hand by N"
     m = /reduce (?:the )?cost of all orders in your hand by (\d+)/i.exec(t);
     if (m) { ops.push({ op: 'ownHandOrderCost', n: +m[1] }); return ops; }
-
-    // "Choose one - X OR Y"
-    m = /choose one\s*-\s*(.+?)\s+or\s+(.+?)\.?$/i.exec(t);
-    if (m) {
-      ops.push({ op: 'choose', options: [parseOps(m[1]), parseOps(m[2])] });
-      return ops;
-    }
 
     // ================= 扩展模式（效果覆盖率 90% 计划，见 AI-PROMPT.md 第四节） =================
 
@@ -1504,8 +1546,16 @@
     allBoard() {
       return [...this.players[0].board, ...this.frontline, ...this.players[1].board];
     }
+    /** 能否移动进入前线：中立或己方控制都可以（移动本身就是夺取手段） */
     canEnterFrontline(side) {
       return this.frontlineOwner === -1 || this.frontlineOwner === side;
+    }
+    /**
+     * 能否**直接部署**到前线：只有在已经控制前线时才允许。
+     * 中立前线（开局 / 双方都撤空）必须先把单位部署到支援阵线，再花行动费推进。
+     */
+    canDeployToFront(side) {
+      return this.frontlineOwner === side;
     }
     frontlineCount(side) { return this.frontline.filter(c => c.owner === side).length; }
 
@@ -1679,6 +1729,7 @@
 
     endTurn() {
       if (this.done) return;
+      if (this.pendingChoose) return;
       const cur = this.current;
       // "At the end of your turn…" 触发（先结算再切换行动方）
       this.fireTrigger('endOfTurn', { side: cur }, u => u.owner === cur);
@@ -1888,12 +1939,14 @@
     hasRoomFor(c) {
       if (c.type === 'location') return this.supportCount(c.owner) < RULES.MAX_ROW;
       if (!c.isUnit) return true;
-      if (this.canEnterFrontline(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW) return true;
+      if (this.canDeployToFront(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW) return true;
       return this.supportCount(c.owner) < RULES.MAX_ROW;
     }
 
     playCard(side, handIndex, opts) {
       opts = opts || {};
+      if (this.pendingChoose) return { ok: false, error: '请先完成二选一' };
+
       if (this.done || this.current !== side) return { ok: false, error: '还没到你的回合' };
       const p = this.players[side];
       const c = p.hand[handIndex];
@@ -1920,7 +1973,7 @@
         return { ok: false, error: `需要 ${slotNeed[1]} 个指挥点槽` };
       }
       if (c.isUnit && opts.toFront === false && this.supportCount(c.owner) >= RULES.MAX_ROW) {
-        if (!(this.canEnterFrontline(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW)) {
+        if (!(this.canDeployToFront(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW)) {
           return { ok: false, error: '支援阵线已满' };
         }
       }
@@ -1950,7 +2003,8 @@
         p.ordersPlayedThisTurn++;
         c.loc = 'discard';
         p.discard.push(c);
-        this.ev({ e: 'order', uid: c.uid, name: c.name, owner: side });
+        this.ev({ e: 'order', uid: c.uid, name: c.name, owner: side,
+                  id: c.id, image: c.def.image, nation: c.nation });
         const ctx = { fromLeftmost, fromRightmost, target: opts.target || null };
         this.execOrderText(c, ctx);
         this.bumpHandWatches('order', side);
@@ -1970,7 +2024,8 @@
       c.chosenTarget = opts.target || null;
 
       // 默认自动选择阵线；玩家通过拖拽可指定（opts.toFront）
-      const canFront = this.canEnterFrontline(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW;
+      // 只有已控制前线时才允许直接部署到前线（否则一律先进支援阵线）
+      const canFront = this.canDeployToFront(c.owner) && this.frontlineCount(c.owner) < RULES.MAX_ROW;
       const toFront = c.isUnit && canFront && (opts.toFront === undefined ? true : !!opts.toFront);
       if (toFront) {
         c.loc = 'front';
@@ -2028,6 +2083,8 @@
     }
 
     move(side, uid, toFront, slot) {
+      if (this.pendingChoose) return { ok: false, error: '请先完成二选一' };
+
       if (this.done || this.current !== side) return { ok: false, error: '还没到你的回合' };
       const c = this.find(uid);
       if (!c) return { ok: false, error: '找不到该卡牌' };
@@ -2080,9 +2137,11 @@
       const foe = 1 - attacker.owner;
       const enemyFront = this.frontline.filter(c => c.owner === foe);
       const pairOk = (t) => this.canAttackPair(attacker, t);
+      // 空中单位（战斗机/轰炸机）与射程 ≥2 的火炮可以越过敌方前线直接打支援阵线
+      const canBypassFront = attacker.type === 'fighter' || attacker.type === 'bomber' || (attacker.range || 1) >= 2;
       if (enemyFront.length) {
         for (const t of enemyFront) if (pairOk(t)) out.push(t.uid);
-        return out;
+        if (!canBypassFront) return out;      // 地面近战必须先清前线
       }
       if (this.hqExposed(foe) || this.frontlineOwner === attacker.owner) {
         // 敌方总部带临时烟幕（DEPTH CHARGES 等）时不可被单位攻击
@@ -2126,6 +2185,8 @@
     }
 
     attack(side, uid, targetUid) {
+      if (this.pendingChoose) return { ok: false, error: '请先完成二选一' };
+
       if (this.done || this.current !== side) return { ok: false, error: '还没到你的回合' };
       const atk = this.find(uid);
       if (!atk || !this.canAttack(atk)) return { ok: false, error: '非法攻击' };
@@ -2423,7 +2484,49 @@
     }
 
     execOps(ops, src, ctx) {
-      for (const op of ops) this.execOp(op, src, ctx || {});
+      // 已有待选择效果未结算：把剩余操作排队，等玩家选完再继续
+      if (this.pendingChoose) {
+        (this._chooseQueue = this._chooseQueue || []).push({ ops, src, ctx, i: 0 });
+        return;
+      }
+      for (let i = 0; i < ops.length; i++) {
+        this.execOp(ops[i], src, ctx || {});
+        if (this.pendingChoose) {
+          (this._chooseQueue = this._chooseQueue || []).push({ ops, src, ctx, i: i + 1 });
+          return;
+        }
+      }
+    }
+
+    /** 玩家二选一结算：执行所选分支，并把排队中的剩余操作继续跑完 */
+    resolveChoose(side, index) {
+      const pc = this.pendingChoose;
+      if (!pc) return { ok: false, error: '没有待选择的效果' };
+      if (pc.side !== side) return { ok: false, error: '不是你的选择' };
+      this.pendingChoose = null;
+      const pick = pc.options[index];
+      if (!pick) return { ok: false, error: '无效的选项' };
+      this.log(`P${side + 1} 选择：${pick.text}`);
+      this.ev({ e: 'choose', side, text: pick.text, index });
+      const src = (this.find(pc.srcUid) || pc.src);
+      this.execOps(pick.ops, src, pc.ctx || {});
+      this.drainChooseQueue();
+      return { ok: true, text: pick.text };
+    }
+
+    /** 把排队中的后续操作继续执行（可能再次触发新的选择） */
+    drainChooseQueue() {
+      const q = this._chooseQueue;
+      if (!q) return;
+      while (q.length) {
+        if (this.pendingChoose) return;
+        const fr = q.shift();
+        for (let i = fr.i; i < fr.ops.length; i++) {
+          this.execOp(fr.ops[i], fr.src, fr.ctx || {});
+          if (this.pendingChoose) { fr.i = i + 1; q.unshift(fr); return; }
+        }
+      }
+      this._chooseQueue = null;
     }
 
     execOp(op, src, ctx) {
@@ -3076,8 +3179,22 @@
           break;
         }
         case 'choose': {
-          // auto-pick first option for AI/simplicity; UI handles real choice
-          if (op.options && op.options.length) this.execOps(op.options[0], src, ctx);
+          const opts = op.options || [];
+          if (!opts.length) break;
+          // 人类玩家：挂起等 UI 二选一；AI / 自对弈：自动取第一项
+          if (this.humanSides && this.humanSides[me]) {
+            this.pendingChoose = {
+              side: me,
+              srcUid: src.uid,
+              src,                     // 指令牌打出后已进弃牌堆，find() 找不到，直接留引用
+              ctx: ctx || {},
+              options: opts.map(o => ({ text: o.text || '', ops: o.ops })),
+            };
+            this.log(`等待 P${me + 1} 二选一：${opts.map(o => o.text).join(' / ')}`);
+            this.ev({ e: 'choosePending', side: me, options: opts.map(o => o.text) });
+            break;
+          }
+          this.execOps(opts[0].ops, src, ctx);
           break;
         }
         case 'forecast': {
@@ -3701,6 +3818,12 @@
           discardCount: this.players[i].discard.length,
         })),
         frontline: this.frontline.map(c => cardView(c, false)),
+        // 二选一：只把选项文本发给正在选择的那一方（对手只看到"对方在选择"）
+        pendingChoose: this.pendingChoose
+          ? (this.pendingChoose.side === side
+              ? { side, options: this.pendingChoose.options.map(o => o.text) }
+              : { side: this.pendingChoose.side, options: [] })
+          : null,
         log: this.logLines.slice(-60),
       };
     }

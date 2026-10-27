@@ -835,3 +835,129 @@ html, body {
   border-radius: 1px;
   box-shadow: 0 0 0 1px rgba(0,0,0,.55);
 }
+
+/* ============ 二选一弹窗 ============ */
+.choose-box {
+  width: min(680px, 88vw);
+  padding: 26px 26px 22px;
+  text-align: center;
+}
+.choose-title {
+  font-size: 20px; letter-spacing: .22em; color: #f0dda6;
+  text-shadow: 0 2px 10px rgba(0,0,0,.8);
+}
+.choose-sub {
+  margin-top: 6px; font-size: 12px; letter-spacing: .1em; color: #a99a78;
+}
+.choose-options {
+  margin-top: 18px;
+  display: grid; gap: 12px;
+}
+.choose-opt {
+  position: relative;
+  padding: 16px 18px;
+  text-align: left;
+  font-family: inherit; font-size: 14px; line-height: 1.5;
+  color: #e9e2cf;
+  background: linear-gradient(180deg, rgba(46,42,34,.92), rgba(20,18,14,.95));
+  border: 1px solid rgba(214,196,150,.34);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+.choose-opt:hover {
+  transform: translateY(-1px);
+  border-color: rgba(240,214,140,.85);
+  box-shadow: 0 6px 18px rgba(0,0,0,.6), 0 0 0 1px rgba(240,214,140,.25) inset;
+}
+.choose-opt .opt-idx {
+  display: inline-block;
+  width: 20px; height: 20px; line-height: 20px; text-align: center;
+  margin-right: 8px;
+  font-size: 11px; font-weight: 700; color: #1a1712;
+  background: linear-gradient(180deg, #e8c96a, #b8942f);
+  border-radius: 3px;
+}
+.choose-opt .opt-hint {
+  display: block; margin-top: 6px;
+  font-size: 11px; letter-spacing: .06em; color: #9c8f70;
+}
+
+/* ============ 指令牌（技能牌）施法 ============ */
+.cast-card {
+  position: absolute;
+  /* 居中由 GSAP 的 xPercent/yPercent 负责（避免和 y/scale 补间互相覆盖） */
+  pointer-events: none;
+  z-index: 62;
+}
+.cast-frame {
+  position: relative;
+  width: 214px; height: 300px;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(240,214,140,.65),
+    0 0 22px 4px rgba(255,190,90,.35),
+    0 22px 54px rgba(0,0,0,.85);
+}
+.cast-frame img {
+  width: 100%; height: 100%;
+  object-fit: cover; display: block;
+}
+.cast-halo {
+  position: absolute; left: 50%; top: 50%;
+  width: 560px; height: 560px;
+  margin: -280px 0 0 -280px;
+  border-radius: 50%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  background: radial-gradient(circle,
+    rgba(255,232,168,.40) 0%, rgba(255,198,88,.20) 32%,
+    rgba(255,170,60,.07) 54%, transparent 70%);
+}
+.cast-rays {
+  position: absolute; left: 50%; top: 50%;
+  width: 820px; height: 820px;
+  margin: -410px 0 0 -410px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0;
+  background: repeating-conic-gradient(from 0deg,
+    rgba(255,230,164,.30) 0deg 2.2deg, transparent 3.4deg 16deg);
+  -webkit-mask-image: radial-gradient(circle, transparent 24%, #000 40%, transparent 72%);
+  mask-image: radial-gradient(circle, transparent 24%, #000 40%, transparent 72%);
+}
+.cast-pulse {
+  position: absolute; left: 50%; top: 50%;
+  width: 120px; height: 120px;
+  margin: -60px 0 0 -60px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,228,156,.92);
+  pointer-events: none;
+  box-shadow: 0 0 18px rgba(255,196,92,.75);
+}
+.cast-ember {
+  position: absolute;
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: #ffe0a0;
+  box-shadow: 0 0 8px 2px rgba(255,170,60,.9);
+}
+.cast-name {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: -30px;
+  white-space: nowrap;
+  font-size: 12px; letter-spacing: .22em;
+  color: #f3e2b0;
+  text-shadow: 0 2px 8px #000, 0 0 14px rgba(255,190,90,.5);
+}
+
+/* 施法压暗：把背景压下去，卡牌成为唯一焦点（原版施法时的暗场） */
+.cast-dim {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 46%,
+    rgba(0,0,0,.30) 0%, rgba(0,0,0,.58) 55%, rgba(0,0,0,.72) 100%);
+  z-index: 61;
+}

@@ -192,6 +192,10 @@ function legalFor(g, seat) {
       if (eff <= p.kredits && room) canPlay.push(i);
     });
   } catch (e) { /* ignore */ }
+  if (g.pendingChoose) {
+    return { attacks: {}, moves: {}, canPlay: [], canEnd: false, active: false,
+             choose: g.pendingChoose.side === seat, options: g.pendingChoose.options.map(o => o.text) };
+  }
   return { attacks, moves, canPlay, canEnd: true, active: true };
 }
 
@@ -232,6 +236,7 @@ function startGame(room) {
     room.game = null;
     return;
   }
+  room.game.humanSides = [true, true];   // 联机双方都是真人，二选一必须等玩家点
   room.started = true;
   for (const p of room.players) {
     p.ws.send(JSON.stringify({ t: 'start', you: p.seat, seed }));
@@ -256,6 +261,9 @@ function handleAction(room, player, msg) {
         break;
       case 'attack':
         res = g.attack(seat, a.uid, a.target);
+        break;
+      case 'choose':
+        res = g.resolveChoose(seat, a.index);
         break;
       case 'endTurn':
         if (g.current === seat && !g.done) { g.endTurn(); res = { ok: true }; }

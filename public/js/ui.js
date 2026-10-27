@@ -849,6 +849,99 @@
       { filter: 'brightness(1) saturate(1) hue-rotate(0deg)', duration: 0.55, ease: 'power2.out', overwrite: 'auto' });
   };
 
+  /**
+   * 指令牌（技能牌）施法：
+   * 手牌位甩出 → 中央放大 → 金光辉光/旋转光芒 → 结算冲击波 → 烧尽消散。
+   * 时长参考录像实测（出牌 0.6~0.9s、单次特效 0.4~0.8s）。
+   */
+  UI.fxOrderCast = function (info) {
+    const g = G();
+    const layer = fxLayer();
+    if (!layer) return 0;
+    const src = info && info.image ? { image: info.image } : null;
+    const srcUrl = src ? imgSrc(src) : null;
+
+    // 暗场：让卡牌成为唯一焦点
+    const dim = document.createElement('div');
+    dim.className = 'cast-dim';
+    layer.appendChild(dim);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'cast-card';
+    wrap.style.left = (TABLE_W / 2) + 'px';
+    wrap.style.top = (TABLE_H * 0.44) + 'px';
+    wrap.innerHTML =
+      `<div class="cast-halo"></div>` +
+      `<div class="cast-rays"></div>` +
+      (srcUrl ? `<div class="cast-frame"><img src="${srcUrl}" alt=""></div>`
+              : `<div class="cast-frame"></div>`);
+    // 卡面本身已印中文卡名，不再额外挂英文名字条（会压到后面的总部卡）
+    layer.appendChild(wrap);
+
+    const frame = wrap.querySelector('.cast-frame');
+    const halo = wrap.querySelector('.cast-halo');
+    const rays = wrap.querySelector('.cast-rays');
+    SFX.play('cast');
+
+    if (!g) {
+      wrap.style.transform = 'translate(-50%, -50%)';
+      setTimeout(() => { wrap.remove(); dim.remove(); }, 900);
+      return 700;
+    }
+    // 用 GSAP 自己的百分比位移做居中，后续 y/scale 补间才不会把居中覆盖掉
+    gsap.set(wrap, { xPercent: -50, yPercent: -50 });
+
+    const cx = TABLE_W / 2, cy = TABLE_H * 0.44;
+    const tl = gsap.timeline({ onComplete: () => { wrap.remove(); dim.remove(); } });
+
+    // ① 从手牌位甩出（0.34s，back.out 收势）
+    tl.fromTo(dim, { opacity: 0 }, { opacity: 1, duration: 0.18, ease: 'power2.out' }, 0)
+      .fromTo(wrap, { y: 230, scale: 0.42, opacity: 0, rotation: -7 },
+      { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.34, ease: 'back.out(1.55)' }, 0)
+      .fromTo(halo, { scale: 0.35, opacity: 0 },
+        { scale: 1, opacity: 1, duration: 0.32, ease: 'power2.out' }, 0.04)
+      .fromTo(rays, { scale: 0.55, opacity: 0, rotation: -26 },
+        { scale: 1.05, opacity: 0.7, rotation: 0, duration: 0.55, ease: 'power2.out' }, 0.06)
+      // ② 悬停呼吸（原版卡牌在中央会轻微起伏）
+      .to(frame, { scale: 1.035, duration: 0.34, ease: 'sine.inOut', yoyo: true, repeat: 1 }, 0.36)
+      // ③ 结算冲击波（约 0.62s 处，和后续伤害/抽牌事件对齐）
+      .add(() => {
+        SFX.play('hit');
+        const pulse = document.createElement('div');
+        pulse.className = 'cast-pulse';
+        pulse.style.left = cx + 'px';
+        pulse.style.top = cy + 'px';
+        layer.appendChild(pulse);
+        gsap.fromTo(pulse, { scale: 0.3, opacity: 0.95 },
+          { scale: 4.2, opacity: 0, duration: 0.55, ease: 'power2.out',
+            onComplete: () => pulse.remove() });
+        UI.shake(4);
+      }, 0.62)
+      // ④ 烧尽：卡面过曝 → 上浮缩小淡出 + 火星
+      .to(dim, { opacity: 0, duration: 0.34, ease: 'power2.in' }, 1.02)
+      .to(frame, { filter: 'brightness(2.4) saturate(1.35)', duration: 0.16, ease: 'power2.in' }, 1.0)
+      .to(wrap, { opacity: 0, scale: 1.07, y: -30, duration: 0.34, ease: 'power2.in' }, 1.06)
+      .to(halo, { opacity: 0, duration: 0.3 }, 1.04)
+      .to(rays, { opacity: 0, duration: 0.3 }, 1.04)
+      .add(() => {
+        for (let i = 0; i < 10; i++) {
+          const e = document.createElement('div');
+          e.className = 'cast-ember';
+          e.style.left = cx + 'px';
+          e.style.top = cy + 'px';
+          layer.appendChild(e);
+          const ang = Math.random() * Math.PI * 2;
+          const r = 60 + Math.random() * 90;
+          gsap.fromTo(e, { scale: 1, opacity: 1 },
+            { x: Math.cos(ang) * r, y: Math.sin(ang) * r * 0.7 - 40,
+              scale: 0.2, opacity: 0, duration: 0.5 + Math.random() * 0.35,
+              ease: 'power2.out', onComplete: () => e.remove() });
+        }
+      }, 1.06);
+
+    return 700;   // 后续事件（伤害/抽牌）在第 0.7s 左右开始，卡牌仍在中央
+  };
+
   /** 胜利金爆：全屏金色绽放 —— 对齐原版胜利瞬间（gif_06 帧 46-47 全屏 25910px 金色） */
   UI.fxVictory = function () {
     const g = G();
@@ -1054,7 +1147,12 @@
         const el = findCardEl(ev.uid);
         if (el) steps.push((next) => { UI.fxVeteran(el); setTimeout(next, 380); return 380; });
       } else if (ev.e === 'order') {
-        steps.push(() => { SFX.play('select'); UI.hint(ev.name, 900); });
+        steps.push(() => {
+          UI.hint(ev.name, 900);
+          return UI.fxOrderCast(ev);
+        });
+      } else if (ev.e === 'choose') {
+        steps.push(() => { SFX.play('select'); UI.hint(`选择：${ev.text}`, 1100); });
       }
     }
 
@@ -1300,7 +1398,9 @@
     // 高亮可用落点
     const st = UI.state, g = UI.engine;
     if (drag.isHand) {
-      highlightSlots(['front', 'support']);
+      // 只有已控制前线时才允许直接部署到前线（否则只能落到支援阵线）
+      const canDeployFront = st.frontlineOwner === st.you;
+      highlightSlots([canDeployFront ? 'front' : null, 'support'].filter(Boolean));
     } else {
       const inst = g.find(drag.v.uid);
       const canFront = inst && g.canMove(inst, true);
@@ -1392,6 +1492,12 @@
 
     if (t) {
       if (d.isHand) {
+        // 前线只有在已由我方控制时才能直接部署（否则必须先落支援阵线再推进）
+        if (t.kind === 'front' && st.frontlineOwner !== st.you) {
+          UI.warn('前线不在你手中，请先部署到支援阵线再推进');
+          cleanupDrag();
+          return;
+        }
         if (t.kind === 'front' || (t.slot && t.kind === 'support')) {
           UI.selectedHand = -1;
           const slot = t.kind === 'front'
@@ -1624,10 +1730,83 @@
     document.addEventListener('DOMContentLoaded', () => { fitTable(); bindTable(); });
   } else { fitTable(); bindTable(); }
 
+  /** 二选一选项：把官方英文句式转成可读中文（卡名保持英文，便于对卡面） */
+  function zhChooseText(txt) {
+    let t = String(txt || '').trim();
+    const pairs = [
+      [/^add (.+?) to your hand$/i, (m) => `将 ${m[1]} 加入手牌`],
+      [/^add (.+?)$/i, (m) => `加入 ${m[1]}`],
+      [/^draw a card and add (.+?) to hand$/i, (m) => `抽一张牌并将 ${m[1]} 加入手牌`],
+      [/^draw (\d+) cards?$/i, (m) => `抽 ${m[1]} 张牌`],
+      [/^draw a card$/i, () => '抽一张牌'],
+      [/^draw an? (.+?) from your deck$/i, (m) => `从牌库抽 ${m[1]}`],
+      [/^deal (\d+) damage to an enemy$/i, (m) => `对敌方单位造成 ${m[1]} 点伤害`],
+      [/^deal (\d+) damage to a unit$/i, (m) => `对 1 个单位造成 ${m[1]} 点伤害`],
+      [/^deal (\d+) damage to all ground units$/i, (m) => `对所有地面单位造成 ${m[1]} 点伤害`],
+      [/^deal (\d+) damage to (?:an? )?(.+)$/i, (m) => `对${m[2]}造成 ${m[1]} 点伤害`],
+      [/^destroy target tank$/i, () => '摧毁目标坦克'],
+      [/^destroy target (.+)$/i, (m) => `摧毁目标${m[1]}`],
+      [/^destroy all units with an odd cost$/i, () => '摧毁所有费用为奇数的单位'],
+      [/^destroy all units with an even cost$/i, () => '摧毁所有费用为偶数的单位'],
+      [/^gain (.+?) and draw a card$/i, (m) => `获得${m[1]}并抽一张牌`],
+      [/^gain (.+?) and your hq gets \+(\d+) defense$/i, (m) => `获得${m[1]}，总部 +${m[2]} 防御`],
+      [/^gain (.+)$/i, (m) => `获得${m[1]}`],
+      [/^give (.+?) (blitz|guard|fury|smokescreen|ambush|shock)$/i, (m) => `使${m[1]}获得${kwZh(m[2])}`],
+      [/^give your hq \+(\d+) defense$/i, (m) => `总部 +${m[1]} 防御`],
+      [/^this unit has 0 operation cost$/i, () => '本单位行动费变为 0'],
+      [/^it gets \+(\d+)\+(\d+)$/i, (m) => `本单位获得 +${m[1]}+${m[2]}`],
+      [/^your units get \+(\d+) heavy armor$/i, (m) => `我方单位获得 +${m[1]} 重甲`],
+      [/^your fighters get \+(\d+)\+(\d+)$/i, (m) => `我方战斗机获得 +${m[1]}+${m[2]}`],
+      [/^shuffle (.+?) into your deck$/i, (m) => `将 ${m[1]} 洗入牌库`],
+      [/^remove the top card of your deck$/i, () => '移除牌库顶的一张牌'],
+      [/^it loses guard, ambush and smokescreen$/i, () => '本单位失去守护、伏击与烟幕'],
+      [/^do this twice for both players$/i, () => '对双方各执行两次'],
+    ];
+    for (const [re, fn] of pairs) {
+      const m = re.exec(t);
+      if (m) return fn(m);
+    }
+    return t;
+  }
+
+  // ---------------- 二选一弹窗 ----------------
+  function syncChooseModal(state) {
+    const modal = document.getElementById('choose-modal');
+    if (!modal) return;
+    const pc = state && state.pendingChoose;
+    if (!pc || pc.side !== state.you || !pc.options || !pc.options.length) {
+      modal.classList.add('hidden');
+      return;
+    }
+    const box = document.getElementById('choose-options');
+    const sig = pc.options.join('|');
+    if (box.dataset.sig !== sig) {
+      box.dataset.sig = sig;
+      box.innerHTML = '';
+      pc.options.forEach((txt, i) => {
+        const b = document.createElement('button');
+        b.className = 'choose-opt';
+        b.innerHTML = `<span class="opt-idx">${i + 1}</span>${escapeHtml(zhChooseText(txt))}`;
+        b.addEventListener('click', () => {
+          if (UI._chooseBusy) return;
+          UI._chooseBusy = true;
+          SFX.play('select');
+          modal.classList.add('hidden');
+          UI.doAction('choose', { index: i });
+          setTimeout(() => { UI._chooseBusy = false; }, 400);
+        });
+        box.appendChild(b);
+      });
+    }
+    modal.classList.remove('hidden');
+  }
+  UI.syncChooseModal = syncChooseModal;
+
   const _origRender = UI.render;
   UI.render = function (state, opts) {
     bindTable();
     _origRender(state, opts);
+    syncChooseModal(state);
   };
 
 })();
