@@ -114,7 +114,11 @@ html, body {
   transition: all .14s; box-shadow: inset 0 0 24px rgba(0,0,0,.45);
 }
 .nav-item:hover { border-color: var(--brass); color: #fff; transform: translateX(2px); }
-.nav-item .ni-ico { font-size: 22px; line-height: 1; filter: sepia(.2); }
+.nav-item .ni-ico {
+  font-size: 22px; line-height: 1;
+  /* 彩色 Emoji → 官方风格的金铜色单色图标 */
+  filter: grayscale(1) sepia(1) saturate(2.4) hue-rotate(-12deg) brightness(1.12);
+}
 .nav-item .ni-txt { font-size: 13px; font-weight: 700; letter-spacing: .12em; }
 .nav-item .ni-txt b { color: var(--brass); }
 .nav-item.primary { border-color: #6a5630; background: linear-gradient(180deg, #3a2e18, #221a0c); }
@@ -174,7 +178,7 @@ html, body {
   display: block; padding: 8px 0; color: var(--brass);
   font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: none;
 }
-.nation-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.nation-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
 
 /* 右栏（官方：Bilibili/竞技场/打开卡包 → 功能映射：构筑/自动卡组/创建房间/加入房间） */
 .home-side { display: flex; flex-direction: column; gap: 10px; width: 150px; flex: none; }
@@ -185,7 +189,11 @@ html, body {
   transition: all .14s; box-shadow: inset 0 0 20px rgba(0,0,0,.45);
 }
 .side-item:hover { border-color: var(--brass); color: #fff; transform: translateY(-2px); }
-.side-item .si-ico { font-size: 22px; filter: sepia(.2); }
+.side-item .si-ico {
+  font-size: 22px; flex: none;
+  /* 同左栏：金色单色，避免彩色 Emoji 破坏军事风 */
+  filter: grayscale(1) sepia(1) saturate(2.4) hue-rotate(-12deg) brightness(1.12);
+}
 .side-item .si-txt { font-size: 12px; font-weight: 700; letter-spacing: .1em; display: flex; flex-direction: column; line-height: 1.3; }
 .side-item .si-txt b { color: var(--brass); font-size: 14px; }
 .side-item.selected { border-color: var(--brass); color: #ffe9a8; box-shadow: 0 0 14px rgba(201,162,39,.25); }
