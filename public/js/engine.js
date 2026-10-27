@@ -568,6 +568,7 @@
     if (m) return [{ op: 'hqHealBonus', n: +m[1] }];
     // 阵亡后回到牌库顶（T-28）
     if (/put it on top of (?:owner's |its owner's )?deck/i.test(t)) return [{ op: 'toDeckTop' }];
+    if (/put (?:target|a|an|the enemy) unit on top of (?:its |the )?owner'?s? deck/i.test(t)) return [{ op: 'toDeckTopTarget', target: 'enemyUnit' }];
     // 抽一张弃一张（34th INFANTRY REGIMENT）
     if (/draw and discard the top card/i.test(t)) return [{ op: 'cycleTop' }];
     // 攻击力翻倍（RED BULL）
@@ -784,6 +785,7 @@
       ops.push({ op: 'groundProof' });
       return ops;
     }
+    if (/units damaged by (?:this unit|[A-Z][A-Z0-9'\-\. ]{2,}) are pinned/i.test(t)) { ops.push({ op: 'pinOnDamage' }); return ops; }
     // "Gain two extra kredit slots" / "Gain an extra kredit slot"
     m = /gain (an? |two |three |\d+ )?(?:extra )?kredit slots?/i.exec(t);
     if (m) {
@@ -2159,6 +2161,7 @@
       }
       c.defense -= amount;
       if (killer && killer._dmgAddsDefense && killer.isUnit) killer.buffDefense += amount;
+      if (killer && killer._pinOnDamage && c.isUnit && !c._pinImmune) { c._pinned = true; this.log(`${c.name} 被打伤后压制`); }
       this.ev({ e: 'damage', uid: c.uid, amount });
       this.log(`${c.name} 受到 ${amount} 点伤害，剩余 ${Math.max(0, c.defense)}`);
       // "When this unit is dealt damage…"
@@ -3401,6 +3404,23 @@
             for (const cl of cls) if (cl.kind === 'destruction') this.execOps(cl.ops, u, { trigger: true });
           }
           this.log('触发我方所有亡计');
+          break;
+        }
+        case 'toDeckTopTarget': {
+          const t = pickUnit('enemyUnit');
+          if (t) {
+            const owner = t.owner;
+            if (t.loc === 'front') { const i = this.frontline.indexOf(t); if (i >= 0) this.frontline.splice(i, 1); if (!this.frontline.length) this.frontlineOwner = -1; }
+            else { const b = this.players[owner].board; const i = b.indexOf(t); if (i >= 0) b.splice(i, 1); }
+            t.loc = 'deck';
+            this.players[owner].deck.unshift(t);
+            this.log(`${t.name} 被放到其拥有者牌库顶`);
+          }
+          break;
+        }
+        case 'pinOnDamage': {
+          src._pinOnDamage = true;
+          this.log(`${src.name}：伤害的单位被压制`);
           break;
         }
         case 'dotAllEnemy': {
