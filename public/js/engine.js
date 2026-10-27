@@ -318,6 +318,11 @@
   function parseOps(s) {
     let t0 = String(s || '').replace(/[\u2019\u2018]/g, "'").trim();
 
+    // 引号授予型（"Your units get: \"...\"") —— 引号内是**持续给其他卡的能力**，
+    // 不能当成本卡的即时效果结算（否则会在打出时立刻摧毁/增益，语义完全错）。
+    // 这类卡目前按"无即时效果"处理（能力授予系统未实现）。
+    if (/^[^:]{0,60}\bgets?:\s*"/i.test(t0)) return [];
+
     // ---- 二选一必须最先处理 ----
     // 否则 "Choose one - add X to your hand OR add Y to your hand" 会被
     // 后半段的 "add … to your hand" 模式截走，只剩一半效果。
@@ -367,6 +372,26 @@
     }
 
     let cond = null;
+    // ---- 复合效果：<效果 A> and/then/, <效果 B>（B 以动词/关键词开头）----
+    // "Fully repair all friendly units and draw a card." / "Pin target enemy air unit and draw a card."
+    // 单个 handler 往往只吃前半句，这里先按复合句拆开分别解析。
+    {
+      const KW_TAIL = 'blitz|guard|fury|smokescreen|ambush|shock|mobilize|alpine|pincer|covert';
+      const comp = new RegExp(
+        '^(.+?)\\s+(?:and|then|,)\\s+((?:draw|gain|deal|pin|suppress|destroy|discard|repair|fully|heal|give|add|put|return|shuffle|reduce|set|remove|reveal|create|spawn|summon|convert|' + KW_TAIL + ')\\b.+)$', 'i')
+        .exec(t0);
+      if (comp && !/^choose\b/i.test(t0)) {
+        const a = parseOps(comp[1]);
+        let b = parseOps(comp[2]);
+        // "Give a unit +1+1 and Blitz." —— 尾部是裸关键词：挂到 A 的最后一个 buff 目标上
+        const bareKw = new RegExp('^(' + KW_TAIL + ')(?: this turn)?\\.?\\s*$', 'i').exec(comp[2].trim());
+        if (!b.length && bareKw && a.length) {
+          const last = [...a].reverse().find(o => o.op === 'buff' || o.op === 'keyword');
+          if (last) b = [{ op: 'keyword', kws: [bareKw[1].toLowerCase()], target: last.target || 'unit', filters: last.filters || null, temp: /this turn/i.test(comp[2]) }];
+        }
+        if (a.length && b.length) return a.concat(b);
+      }
+    }
     if (/\bif\b/i.test(t0)) {
       const parts = t0.split(/\bif\b/i);
       const c = parseCondTail(parts.slice(1).join(' if '));
@@ -560,9 +585,33 @@
       return ops;
     }
 
-    // "Draw N card(s)"
-    m = /\bdraw (\d+) cards?/i.exec(t);
-    if (m) { ops.push({ op: 'draw', n: +m[1] }); return ops; }
+    // ---- 随机分配 / 全体行动费 / 双倍属性 / 洗牌重抽 / 敌方弃单位 ----
+    m = /(?:randomly )?distribute (?:the )?(\d+) damage (?:randomly )?(?:between|among|to) (?:all )?enem/i.exec(t);
+    if (m) { ops.push({ op: 'distributeDamage', n: +m[1] }); return ops; }
+    m = /distribute (?:your |a |the )?(\d+) defense (?:between|among|to) (?:random )?friendly/i.exec(t);
+    if (m) { ops.push({ op: 'distributeDefense', n: +m[1] }); return ops; }
+    m = /distribute (?:the )?attack of (?:a |target )?friendly unit as damage/i.exec(t);
+    if (m) { ops.push({ op: 'distributeAttack' }); return ops; }
+    m = /set the operation cost of all units(?: on the battlefield)? to (\d+)/i.exec(t);
+    if (m) { ops.push({ op: 'setAllOpCost', n: +m[1] }); return ops; }
+    m = /double the attack and defense of (?:a |target )?(friendly )?unit/i.exec(t);
+    if (m) { ops.push({ op: 'doubleStats', target: m[1] ? 'friendlyUnit' : 'unit' }); return ops; }
+    m = /each player shuffles? their hand into their deck,? then draws? (\d+) cards?/i.exec(t);
+    if (m) { ops.push({ op: 'shuffleHandDraw', n: +m[1] }); return ops; }
+    m = /enemy discards? all units from (?:their |the )?hand/i.exec(t);
+    if (m) { ops.push({ op: 'enemyDiscardUnits' }); return ops; }
+
+    // "Draw N card(s)"（数字或英文数词）
+    m = /\bdraw (\d+|two|three|four) cards?/i.exec(t);
+    if (m) {
+      const w = m[1].toLowerCase();
+      const n = w === 'two' ? 2 : w === 'three' ? 3 : w === 'four' ? 4 : +w;
+      ops.push({ op: 'draw', n });
+      // 余句继续解析（"Draw three cards, then choose and discard a card."）
+      const rest = t.slice(m.index + m[0].length).replace(/^[\s,;]+(?:then\s+|and\s+)?/i, '').trim();
+      if (rest) ops.push(...parseOps(rest));
+      return ops;
+    }
 
     // "Gain N extra kredit slot(s)" / "Gain N kredits"
     m = /\bgain (\d+) extra kredit slots?/i.exec(t);
@@ -620,6 +669,9 @@
       ops.push({ op: 'slots', n });
       return ops;
     }
+    // "Enemy loses a kredit slot"（SHELLING）
+    m = /(?:the )?enemy (?:loses?|lose) (an? |two |Three |\d+ )?kredit slots?/i.exec(t);
+    if (m) { ops.push({ op: 'slots', n: -1, side: 'enemy' }); return ops; }
     // "Lose N kredits at the start of your next turn"
     m = /lose (\d+) kredits? at the start of your next turn/i.exec(t);
     if (m) { ops.push({ op: 'kreditsNextTurn', n: -Math.abs(+m[1]) }); return ops; }
@@ -658,6 +710,9 @@
     // "At the end of turn, Convert into MOSQUITO F Mk II."
     m = /convert into (.+?)\.?$/i.exec(t);
     if (m) { ops.push({ op: 'convert', name: m[1].trim() }); return ops; }
+    // "All enemy units are Converted into ROUTED TROOPS."（CAPITULATION）
+    m = /(?:(all|each|every) )?(?:enemy|target enemy) units? (?:are |is |get )?converted into (.+?)\.?$/i.exec(t);
+    if (m) { ops.push({ op: 'convert', target: /all|each|every/i.test(m[1] || '') ? 'allEnemyUnits' : 'enemyUnit', to: m[2].trim() }); return ops; }
     // "While in the frontline, your HQ cannot be reduced below 1 defense."
     m = /while in the frontline, your hq cannot be reduced below (\d+)/i.exec(t);
     if (m) { ops.push({ op: 'hqFloor', n: +m[1] }); return ops; }
@@ -1157,13 +1212,13 @@
     m = /\bdraw two cards?\b/i.exec(t);
     if (m) { ops.push({ op: 'draw', n: 2 }); return ops; }
 
-    // --- Develop（从牌库直接打出一 Dialing 卡） ---
-    m = /\bdevelop (?:a |an |two )?(?:[a-z]+ |[a-z]+ or [a-z]+ )?([A-Z][A-Z0-9'\-\. ]{1,40})/.exec(t)
-      || /\bdevelop (?:a |an |two )?(british|german|soviet|japanese|us|french|polish|finnish|italian)? ?(special force |countermeasure |order |bomber |navy |unit |card )/.exec(t);
+    // --- Develop（从牌库直接打出一张符合条件的卡） ---
+    // "Develop a British or US bomber." / "Develop a British special force unit." / "Develop a Navy card."
+    m = /\bdevelop (?:an? )?(?:([a-z]+)(?: or ([a-z]+))? )?(special force|countermeasure|unit|card|order|bomber|fighter|tank|infantry|artillery|navy)\b/i.exec(t);
     if (m) {
-      const nationMap2 = { british: 'Britain', german: 'Germany', soviet: 'Soviet', japanese: 'Japan', 'us': 'USA' };
-      ops.push({ op: 'develop', name: (m[1] || '').trim(), nation: nationMap2[(m[2] || '').toLowerCase()] || null,
-                 kind: (m[2] || '').trim() || null });
+      const nationMap2 = { british: 'Britain', german: 'Germany', soviet: 'Soviet', japanese: 'Japan', us: 'USA', american: 'USA', french: 'France', italian: 'Italy', polish: 'Poland', finnish: 'Finland', navy: null };
+      const nat = nationMap2[(m[1] || '').toLowerCase()] || null;
+      ops.push({ op: 'develop', nation: nat, kind: (m[3] || '').trim() });
       return ops;
     }
 
@@ -2858,6 +2913,86 @@
           this.log(`敌方手牌费用 +${op.n}`);
           break;
         }
+        case 'distributeDamage': {
+          // "Randomly distribute 8 damage between enemies"（STALIN'S ORGAN / IJN SHINANO）
+          const list = this.unitsOf(foe);
+          if (!list.length) break;
+          let left = op.n + (src && src.type === 'order' ? (this.players[me]._orderDmgMod || 0) : 0);
+          let guardCnt = 0;
+          while (left > 0 && guardCnt < 200) {
+            guardCnt++;
+            const alive = list.filter(u => u.loc !== 'discard' && u.defense > 0);
+            if (!alive.length) break;
+            const t = this.rng.pick(alive);
+            this.damageCard(t, 1, src);
+            left--;
+          }
+          this.log(`随机分配 ${op.n} 点伤害`);
+          break;
+        }
+        case 'distributeDefense': {
+          const list = this.unitsOf(me).filter(u => u.loc !== 'discard');
+          if (!list.length) break;
+          for (let i = 0; i < (op.n || 0); i++) {
+            const t = this.rng.pick(list);
+            if (t) t.buffDefense += 1;
+          }
+          this.log(`随机分配 ${op.n} 点防御`);
+          break;
+        }
+        case 'distributeAttack': {
+          const own = this.unitsOf(me).filter(u => u.uid !== (src && src.uid) && u.totalAttack > 0);
+          const t = own.length ? this.rng.pick(own) : null;
+          const n = t ? t.totalAttack : 0;
+          const list = this.unitsOf(foe).filter(u => u.loc !== 'discard');
+          for (let i = 0; i < n && list.length; i++) {
+            const d = this.rng.pick(list.filter(u => u.defense > 0)) || list[0];
+            if (d) this.damageCard(d, 1, src);
+          }
+          this.log(`${t ? t.name : '单位'} 的攻击力（${n}）随机分配给敌方`);
+          break;
+        }
+        case 'setAllOpCost': {
+          for (const u of [...this.unitsOf(0), ...this.unitsOf(1)]) u._opCostMod = op.n - (u.opCost || 0);
+          this.log(`全场单位行动费设为 ${op.n}`);
+          break;
+        }
+        case 'doubleStats': {
+          const t = op.target === 'friendlyUnit' ? pickUnit('friendlyUnit') : pickUnit('unit');
+          if (t && t.isUnit) {
+            t.buffAttack += t.totalAttack;
+            t.buffDefense += t.totalDefense;
+            this.log(`${t.name} 攻防翻倍（${t.totalAttack}/${t.totalDefense}）`);
+          }
+          break;
+        }
+        case 'shuffleHandDraw': {
+          // 双方手牌洗回牌库后各抽 N 张（TAKE LIBERTY）
+          for (const side of [0, 1]) {
+            const p = this.players[side];
+            const back = p.hand.splice(0, p.hand.length);
+            for (const c of back) { c.loc = 'deck'; p.deck.push(c); }
+            for (let i = p.deck.length - 1; i > 0; i--) {
+              const j = Math.floor(this.rng.next() * (i + 1));
+              [p.deck[i], p.deck[j]] = [p.deck[j], p.deck[i]];
+            }
+            this.draw(side, op.n || 4, true);
+          }
+          this.log(`双方手牌洗回牌库，各抽 ${op.n || 4} 张`);
+          break;
+        }
+        case 'enemyDiscardUnits': {
+          // "Enemy discards all units from hand"（NAVAL BLOCKADE）
+          const p = this.players[foe];
+          const units = p.hand.filter(c => ['infantry', 'tank', 'artillery', 'fighter', 'bomber'].includes(c.type));
+          for (const c of units) {
+            p.hand.splice(p.hand.indexOf(c), 1);
+            c.loc = 'discard';
+            p.discard.push(c);
+          }
+          this.log(`敌方弃掉 ${units.length} 张手牌单位`);
+          break;
+        }
         case 'damage': {
           const apply = (t, n) => {
             if (!t) return;
@@ -2918,10 +3053,12 @@
         }
         case 'draw': this.draw(me, op.n); break;
         case 'slots': {
-          const p = this.players[me];
-          p.slots = Math.min(RULES.MAX_SLOTS, p.slots + op.n);
-          p.kredits = Math.min(RULES.MAX_SLOTS, p.kredits + op.n);
-          this.log(`指挥点上限 +${op.n}`);
+          // side:'enemy' —— "Enemy loses a kredit slot"（SHELLING）
+          const tgtSide = op.side === 'enemy' ? foe : me;
+          const p = this.players[tgtSide];
+          p.slots = Math.max(1, Math.min(RULES.MAX_SLOTS, p.slots + op.n));
+          p.kredits = Math.max(0, Math.min(RULES.MAX_SLOTS, p.kredits + op.n));
+          this.log(`P${tgtSide + 1} 指挥点上限 ${op.n > 0 ? '+' : ''}${op.n}`);
           break;
         }
         case 'hqDrain': {

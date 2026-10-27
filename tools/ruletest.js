@@ -140,8 +140,10 @@ if (GUARD && INF) {
   const targets = g.attackTargets(atk);
   check('guard blocks attack on adjacent unit', !targets.includes(target.uid));
   check('guard unit itself can be attacked', targets.includes(guard.uid));
-  // HQ guarded
-  check('HQ is guarded by guard unit', g.hqIsGuarded(0) === true);
+  // HQ guarded：官方只认**紧邻 HQ** 的 Guard（支援线 slot1 / slot2）
+  check('HQ 不被远端 Guard（slot0）掩护', g.hqIsGuarded(0) === false);
+  const guard2 = new Engine.CardInst(GUARD, 1, g); guard2.loc = 'board'; guard2.slot = 1; p2.board.push(guard2);
+  check('HQ 被紧邻 Guard（slot1）掩护', g.hqIsGuarded(0) === true);
 }
 
 console.log('=== smokescreen ===');
