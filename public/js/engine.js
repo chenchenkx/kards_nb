@@ -1711,7 +1711,14 @@
     }
     hqIsGuarded(attackerSide) {
       const foe = 1 - attackerSide;
-      return this.players[foe].board.some(c => c.isUnit && c.has('guard') && !c.has('covert'));
+      const guards = this.players[foe].board.filter(c => c.isUnit && c.has('guard') && !c.has('covert'));
+      if (!guards.length) return false;
+      // 官方 hq_is_being_garded：只有**紧邻 HQ** 的 Guard 才掩护总部。
+      // 支援线布局 slot0 slot1 [HQ] slot2 slot3 → HQ 相邻位是 slot 1 / 2。
+      const slotted = guards.filter(g => g.slot != null);
+      if (slotted.length) return slotted.some(g => g.slot === 1 || g.slot === 2);
+      // 槽位信息缺失时保守处理：按"有 Guard 即掩护"
+      return true;
     }
     isGuarded(target) {
       // 官方 UpdateGuarded 语义：只有支援线（location 5/6）有掩护，
@@ -2261,6 +2268,8 @@
     }
 
     canAttackPair(atk, def) {
+      // 隐蔽（Covert）：未揭示的单位不可被指定为目标（官方 cant_target_unrevealed）
+      if (def.has('covert') && !def._revealed) return false;
       // 后排"不能被地面单位攻击"（C6N SAIUN / F1M2 PETE）
       if (def._groundProof && def.loc !== 'front' && ['infantry', 'tank', 'artillery'].includes(atk.type)) return false;
       // smokescreen: cannot be attacked by units until it has acted
@@ -2357,6 +2366,8 @@
       const shock = atk.has('shock');
 
       this.log(`${atk.name}（攻击 ${atk.totalAttack}）攻击 ${def.name}（防御 ${def.totalDefense}）（-${atk.effOpCost} 指挥点）`);
+      // 隐蔽单位主动攻击后揭示自身（官方：Covert 攻击即暴露）
+      if (atk.has('covert')) atk._revealed = true;
       const atkSilenced = !!atk._pinned || !!atk._suppressed;
       const defSilenced = !!def._pinned || !!def._suppressed;
       const dmg = (a, d, silenced) => {
