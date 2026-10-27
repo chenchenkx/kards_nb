@@ -22,16 +22,16 @@ function runGame(seed, verbose) {
     const side = g.current;
     const p = g.players[side];
     // --- naive AI ---
-    // play cards
-    let played = true;
-    while (played) {
+    // play cards（每回合上限 30 张，避免 0 费 token 被无限生成的 combo 把朴素 AI 卡死）
+    let played = true, plays = 0;
+    while (played && plays < 30) {
       played = false;
       for (let i = 0; i < p.hand.length; i++) {
         const c = p.hand[i];
         const effCost = Math.max(0, (c.cost || 0) + (c._costMod || 0));
         if (effCost <= p.kredits && g.hasRoomFor(c)) {
           const r = g.playCard(side, i, {});
-          if (r.ok) { played = true; break; }
+          if (r.ok) { played = true; plays++; break; }
         }
       }
     }

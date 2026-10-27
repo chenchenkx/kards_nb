@@ -587,11 +587,11 @@ html, body {
 }
 @keyframes flash-out { 0% { opacity: 0; } 25% { opacity: 1; } 100% { opacity: 0; } }
 
-/* ============ 原版对齐特效素材（实测自动画帧） ============
- * 白烟：原版摧毁时 4-6 团不规则烟云，约 0.6-0.7s 缓慢扩散
- * 火焰：燃烧摧毁约 0.87s（13 帧 @15fps）持续闪烁，覆盖约 2 张卡宽
+/* ============ 原版对齐特效素材（view.md 实测基线） ============
+ * 白烟（阵亡）：多团不规则烟云，0.9~1.5s 缓慢扩散（比命中火焰长）
+ * 火焰（命中/燃烧）：0.4~0.8s 持续闪烁，覆盖约 2 张卡宽
  * 焦痕：摧毁后在桌面留下黑色焦斑
- * 金爆：胜利时 2 帧内全屏金色绽放
+ * 金爆（胜利）：先压暗 0.15s，再 0.6s 全屏金色绽放
  * ================================================================ */
 .puff {
   position: absolute; width: 130px; height: 130px;
@@ -658,6 +658,12 @@ html, body {
       rgba(255,248,214,.98) 0%, rgba(255,206,96,.72) 26%, rgba(255,170,54,.34) 48%, transparent 66%);
   -webkit-mask-image: radial-gradient(circle, #000 52%, transparent 70%);
   mask-image: radial-gradient(circle, #000 52%, transparent 70%);
+}
+/* 胜利压暗：金爆前 0.15s 的暗场（原版胜利先压暗再爆发） */
+.victory-dim {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,.42) 0%, rgba(0,0,0,.66) 70%);
+  z-index: 60;
 }
 /* 实时攻防数值：覆盖卡图上印刷的固定数值（位置按卡图实测：攻 27% / 防 73%） */
 .card .stat {
@@ -771,6 +777,18 @@ html, body {
 
 /* ============ 结算 ============ */
 .gameover-box { text-align: center; }
+/* 胜利徽记：金色 16 瓣菊花（对齐官方结算画面） */
+.gameover-flower {
+  display: flex; justify-content: center; margin: 0 auto 4px;
+  filter: drop-shadow(0 0 22px rgba(255,190,80,.55));
+  animation: go-flower-in .55s cubic-bezier(.2,.9,.3,1.2) both;
+}
+.gameover-flower.hidden { display: none !important; }
+@keyframes go-flower-in {
+  0% { transform: scale(.3) rotate(-32deg); opacity: 0; }
+  60% { transform: scale(1.12) rotate(6deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
 .gameover-title { font-size: 52px; font-weight: 900; letter-spacing: .18em; }
 .gameover-title.win { color: #e8c96a; text-shadow: 0 0 30px rgba(232,201,106,.5); }
 .gameover-title.lose { color: #c0483a; text-shadow: 0 0 30px rgba(192,72,58,.5); }

@@ -56,7 +56,7 @@ setTimeout(async () => {
     doc.getElementById('btn-vs-ai').click();
     await new Promise(r => setTimeout(r, 600));
     check('game screen visible', !doc.getElementById('game-screen').classList.contains('hidden'));
-    check('own hand rendered', doc.querySelectorAll('#own-hand .card').length === 5);
+    check('own hand rendered', doc.querySelectorAll('#own-hand .card').length === 4);
     check('HQ defense badges show 20', [...doc.querySelectorAll('.hq-def-badge')].every(b => b.textContent === '20'));
     check('kredits displayed', doc.querySelector('#own-kredit .kb-cur').textContent === '1');
     check('kredit K label', !!doc.querySelector('#own-kredit .kb-k'));
@@ -118,7 +118,7 @@ setTimeout(async () => {
       return true;
     };
     let actions = 0;
-    for (let step = 0; step < 110 && !window.App.engine.done; step++) {
+    for (let step = 0; step < 170 && !window.App.engine.done; step++) {
       const g = window.App.engine;
       // play a card if affordable
       const hand = g.players[0].hand;
@@ -145,7 +145,7 @@ setTimeout(async () => {
         actions++;
       }
       window.UI.doAction('endTurn', {});
-      await new Promise(r => setTimeout(r, 900));
+      await new Promise(r => setTimeout(r, 650));
       if (window.App.engine.done) break;
     }
     // wait for AI turn callbacks to settle
@@ -153,7 +153,7 @@ setTimeout(async () => {
     check('game played to completion via UI actions', window.App.engine.done);
     check('actions executed', actions > 10);
     check('gameover modal shown', !doc.getElementById('gameover-modal').classList.contains('hidden'));
-    check('victory/defeat title', /VICTORY|DEFEAT/.test(doc.getElementById('gameover-title').textContent));
+    check('victory/defeat title', /VICTORY|DEFEAT|胜利|战败/.test(doc.getElementById('gameover-title').textContent));
 
     // log has entries
     check('battle log populated', doc.getElementById('log-panel').children.length > 10);

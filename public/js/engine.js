@@ -1530,9 +1530,10 @@
     drainEvents() { const e = this.events; this.events = []; return e; }
 
     start() {
-      for (const i of [0, 1]) {
-        for (let k = 0; k < RULES.STARTING_HAND; k++) this.draw(i, 1, true);
-      }
+      // 官方：先攻 4 张、后攻 5 张；先攻首回合不额外抽牌（后续回合各抽 1）
+      this.draw(0, 4, true);
+      this.draw(1, 5, true);
+      this._skipOpeningDraw = true;
       this.beginTurn();
     }
 
@@ -1683,7 +1684,8 @@
       this.fireTrigger('startOfTurn', { side: this.current }, u => u.owner === this.current);
       this.log(`── 第 ${this.turn} 回合（P${this.current + 1}）${p.kredits}/${p.slots} 指挥点 ──`);
       this.ev({ e: 'turn', turn: this.turn, side: this.current, kredits: p.kredits, slots: p.slots });
-      this.draw(this.current, 1);
+      if (this._skipOpeningDraw) this._skipOpeningDraw = false;
+      else this.draw(this.current, 1);
     }
 
     /**
@@ -2160,16 +2162,30 @@
       if (def.has('guard') === false && this.isGuarded(def)) {
         if (!(atk.type === 'bomber' || atk.type === 'artillery')) return false;
       }
-      // bomber cannot attack units in same row as an enemy fighter
+      // 轰炸机拦截：若目标阵线有敌方战斗机，则只能攻击该战斗机（打战斗机本身是允许的）
       if (atk.type === 'bomber') {
         const row = def.loc === 'front' ? this.frontline : this.players[def.owner].board;
         const hasFighter = row.some(c => c.owner === def.owner && c.type === 'fighter');
-        if (hasFighter) return false;
+        if (hasFighter && def.type !== 'fighter') return false;
       }
       // range: support-line vs support-line needs range >= 2
       if (def.loc !== 'front' && atk.loc !== 'front' && atk.range < 2) return false;
       // ground units in support line cannot attack enemy support line without frontline
       // (handled by structural target list; frontline units can always attack)
+      return true;
+    }
+
+    /**
+     * 反击判定（官方规则）：
+     * - 防守方是轰炸机 / 炮兵 → 不造成反击
+     * - 攻击方是炮兵 → 不吃反击
+     * - 攻击方是轰炸机且目标不是战斗机 → 不吃反击（轰炸机只在与战斗机战斗时受反击）
+     */
+    canCounter(atk, def) {
+      if (!atk || !def) return false;
+      if (def.type === 'bomber' || def.type === 'artillery') return false;
+      if (atk.type === 'artillery') return false;
+      if (atk.type === 'bomber' && def.type !== 'fighter') return false;
       return true;
     }
 
@@ -2229,7 +2245,8 @@
       // "When this unit attacks…" 触发（宣告攻击时结算，覆盖伏击/冲击等分支）
       this.fireTrigger('selfAttack', { uid: atk.uid, target: def.uid }, u => u.uid === atk.uid);
 
-      const ambush = def.has('ambush');
+      // 伏击：每回合仅首次被攻击时生效；对无法反击的搭配（炮兵/轰炸机）无效
+      const ambush = def.has('ambush') && def._ambushTurn !== this.turn && this.canCounter(atk, def);
       const shock = atk.has('shock');
 
       this.log(`${atk.name}（攻击 ${atk.totalAttack}）攻击 ${def.name}（防御 ${def.totalDefense}）（-${atk.effOpCost} 指挥点）`);
@@ -2262,6 +2279,7 @@
       if (ambush || shock) {
         // Ambush: defender strikes first. Shock: attacker strikes first.
         if (ambush) {
+          def._ambushTurn = this.turn;   // 本回合已用掉伏击
           const d1 = dmg(def, atk, defSilenced);
           if (d1 > 0) atk.defense -= d1;
           this.log(`${def.name}（伏击）先手造成 ${d1} 点伤害`);
@@ -2273,27 +2291,17 @@
           const d1 = dmg(atk, def, atkSilenced);
           if (d1 > 0) def.defense -= d1;
           this.log(`${atk.name}（冲击）先手造成 ${d1} 点伤害`);
+          atk.keywords.delete('shock');   // 冲击用后移除
           if (def.defense <= 0) { this.destroyCard(def, atk, true); return { ok: true }; }
-          // retaliation
-          let canFightBack = true;
-          if (atk.type === 'artillery') canFightBack = false;
-          if (atk.type === 'bomber' && !(def.type === 'fighter' || def.type === 'artillery')) canFightBack = false;
-          if (canFightBack) {
-            const d2 = dmg(def, atk, defSilenced);
-            if (d2 > 0) atk.defense -= d2;
-            if (atk.defense <= 0) this.destroyCard(atk, def, true);
-          }
+          // 冲击：被攻击单位不会造成任何反击伤害
         }
         return { ok: true };
       }
       const defBefore = def.defense;
       const dToDef = dmg(atk, def, atkSilenced);
       let dToAtk = 0;
-      // retaliation rules
-      let canFightBack = true;
-      if (atk.type === 'artillery') canFightBack = false;
-      if (atk.type === 'bomber' && !(def.type === 'fighter' || def.type === 'artillery')) canFightBack = false;
-      if (canFightBack) dToAtk = dmg(def, atk, defSilenced);
+      // 反击判定（见 canCounter）：防守方为轰炸机/炮兵不反击；炮兵攻击不吃反击；轰炸机仅对战斗机吃反击
+      if (this.canCounter(atk, def)) dToAtk = dmg(def, atk, defSilenced);
       if (dToDef > 0) def.defense -= dToDef;
       if (dToAtk > 0) atk.defense -= dToAtk;
       this.log(`${def.name} 受到 ${dToDef} 点伤害，${atk.name} 受到 ${dToAtk} 点反击伤害`);

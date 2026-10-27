@@ -908,8 +908,25 @@
     const modal = document.getElementById('gameover-modal');
     const title = document.getElementById('gameover-title');
     const sub = document.getElementById('gameover-sub');
-    title.textContent = win ? 'VICTORY' : 'DEFEAT';
+    // 对齐官方结算：金色 16 瓣菊花徽记 + 「胜利 / 战败」大字
+    title.textContent = win ? '胜利' : '战败';
     title.className = 'gameover-title ' + (win ? 'win' : 'lose');
+    const flower = document.getElementById('gameover-flower');
+    if (flower) {
+      if (win) {
+        let petals = '';
+        for (let i = 0; i < 16; i++) {
+          petals += `<ellipse cx="60" cy="27" rx="7" ry="19" transform="rotate(${i * 22.5} 60 60)"/>`;
+        }
+        flower.innerHTML = '<svg viewBox="0 0 120 120" width="132" height="132">' +
+          '<g fill="#dfa63c" stroke="#7d5314" stroke-width="1.4">' + petals + '</g>' +
+          '<circle cx="60" cy="60" r="9.5" fill="#f0c265" stroke="#7d5314" stroke-width="1.4"/></svg>';
+        flower.classList.remove('hidden');
+      } else {
+        flower.innerHTML = '';
+        flower.classList.add('hidden');
+      }
+    }
     sub.textContent = win ? '敌军总部已被摧毁，战役胜利！' : '你的总部已被攻陷，战役失败。';
     modal.classList.remove('hidden');
     // 胜利金爆（对齐原版胜利瞬间的全屏金色绽放）

@@ -681,7 +681,8 @@
 
   /**
    * 燃烧爆裂 —— 对齐原版命中/摧毁火焰（gif_04 帧 32-45）：
-   * 白闪核心 + 6 条火焰舌（各自随机闪烁）+ 火星，总时长约 0.85-0.95s。
+   * 白闪核心 + 6 条火焰舌（各自随机闪烁）+ 火星，总时长约 0.6-0.8s
+   * （view.md 2.14.2：命中火焰实测 0.4~0.8s，比旧版 0.9s 收紧）。
    */
   UI.fxBurst = function (c, opts) {
     const g = G();
@@ -689,14 +690,14 @@
     const big = !(opts && opts.small);
     const scale = big ? 1 : 0.72;
 
-    // ① 中央白闪核心（200ms 内炸开消散）
+    // ① 中央白闪核心（~200ms 内炸开消散）
     const core = document.createElement('div');
     core.className = 'blast-core';
     core.style.left = c.x + 'px';
     core.style.top = c.y + 'px';
     fxLayer().appendChild(core);
     g.timeline().fromTo(core, { scale: 0.25 * scale, opacity: 0.95 },
-      { scale: 1.9 * scale, opacity: 0, duration: 0.26, ease: 'power3.out' })
+      { scale: 1.9 * scale, opacity: 0, duration: 0.2, ease: 'power3.out' })
       .add(() => core.remove());
 
     // ② 火焰舌：6 条，随机方位/大小，各自独立闪烁（原版帧间亮度起伏大）
@@ -712,28 +713,28 @@
       const tl = g.timeline({ delay: i * 0.028 + Math.random() * 0.03 });
       tl.fromTo(f, { scale: 0.2 * scale, opacity: 0, rotation: (Math.random() - 0.5) * 40 },
         { scale: (0.78 + Math.random() * 0.4) * scale, opacity: 0.95, rotation: (Math.random() - 0.5) * 16,
-          duration: 0.09, ease: 'back.out(2.2)' })
+          duration: 0.08, ease: 'back.out(2.2)' })
         .to(f, {
           x: Math.cos(ang) * dist, y: Math.sin(ang) * dist - 8 * scale,
-          duration: 0.16, ease: 'power2.out',
+          duration: 0.12, ease: 'power2.out',
         }, 0);
-      // 闪烁：6 段随机脉冲
-      for (let k = 0; k < 6; k++) {
+      // 闪烁：4 段随机脉冲（原版靠帧间闪烁拉层次，但整体收紧到 0.8s 内）
+      for (let k = 0; k < 4; k++) {
         tl.to(f, {
           scale: (0.72 + Math.random() * 0.62) * scale,
           opacity: 0.62 + Math.random() * 0.38,
           x: Math.cos(ang) * (dist + (Math.random() * 10 - 5)),
           y: Math.sin(ang) * dist - 8 * scale + (Math.random() * 10 - 5),
-          duration: 0.05 + Math.random() * 0.04, ease: 'none',
+          duration: 0.04 + Math.random() * 0.03, ease: 'none',
         });
       }
-      tl.to(f, { scale: (0.45 + Math.random() * 0.3) * scale, opacity: 0.4, duration: 0.13, ease: 'power2.in' })
-        .to(f, { scale: 0.1, opacity: 0, duration: 0.14, ease: 'power2.in' })
+      tl.to(f, { scale: (0.45 + Math.random() * 0.3) * scale, opacity: 0.4, duration: 0.1, ease: 'power2.in' })
+        .to(f, { scale: 0.1, opacity: 0, duration: 0.12, ease: 'power2.in' })
         .add(() => f.remove());
     }
 
-    // ③ 烧尽后的黑烟（原版：火焰熄灭后黑烟笼罩约 0.45s）
-    setTimeout(() => UI.fxDarkSmoke(c, { n: 4 }), 520);
+    // ③ 烧尽后的黑烟（原版：火焰熄灭后黑烟笼罩约 0.45s；火焰收紧后提前到 ~0.4s）
+    setTimeout(() => UI.fxDarkSmoke(c, { n: 4 }), 400);
 
     // ③ 火星：向外飞散 + 下坠
     const ne = big ? 9 : 5;
@@ -942,23 +943,34 @@
     return 700;   // 后续事件（伤害/抽牌）在第 0.7s 左右开始，卡牌仍在中央
   };
 
-  /** 胜利金爆：全屏金色绽放 —— 对齐原版胜利瞬间（gif_06 帧 46-47 全屏 25910px 金色） */
+  /** 胜利金爆：全屏金色绽放 —— 对齐原版胜利瞬间（gif_06 帧 46-47 全屏 25910px 金色）
+   *  原版节奏：**先压暗 0.15s 再爆发 0.6s**（view.md 2.14.4 #4：亮度 24→16 同时火焰暴涨 20 倍）。 */
   UI.fxVictory = function () {
     const g = G();
     if (!g) return;
+    const dim = document.createElement('div');
+    dim.className = 'victory-dim';
+    fxLayer().appendChild(dim);
     const w = document.createElement('div');
     w.className = 'victory-burst';
     fxLayer().appendChild(w);
     g.timeline()
+      // ① 先压暗 0.15s
+      .fromTo(dim, { opacity: 0 }, { opacity: 1, duration: 0.15, ease: 'power2.in' })
+      // ② 再金爆 0.6s
       .fromTo(w, { scale: 0.15, opacity: 0, rotation: -18 },
-        { scale: 1, opacity: 1, rotation: 0, duration: 0.16, ease: 'back.out(2.4)' })
-      .to(w, { scale: 1.18, opacity: 0, duration: 0.62, ease: 'power2.in' }, '+=0.28')
-      .add(() => w.remove());
+        { scale: 1, opacity: 1, rotation: 0, duration: 0.18, ease: 'back.out(2.4)' }, 0.15)
+      .to(w, { scale: 1.18, opacity: 0, duration: 0.6, ease: 'power2.in' }, 0.33)
+      .to(dim, { opacity: 0, duration: 0.5, ease: 'power1.in' }, 0.33)
+      .add(() => { w.remove(); dim.remove(); });
   };
 
-  /** 摧毁白烟（保留旧接口，内部改为多团烟云） */
+  /** 摧毁白烟（保留旧接口，内部改为多团烟云）
+   *  原版阵亡白烟实测 0.9~1.5s 缓慢扩散，明显比命中火焰（0.4~0.8s）长（view.md 2.14.2/2.14.4 #3）。
+   *  这里把 life 拉到 1.15（实际 0.9~1.4s），再叠一层延迟黑烟增加层次。 */
   UI.fxSmoke = function (c) {
-    UI.fxPuffs(c, { n: 6, spread: 52, life: 0.72 });
+    UI.fxPuffs(c, { n: 8, spread: 64, life: 1.15 });
+    setTimeout(() => UI.fxDarkSmoke(c, { n: 3 }), 260);
   };
 
   UI.fxHQHit = function (which, amount) {
@@ -1073,7 +1085,7 @@
                 SFX.play('hit');
                 UI.fxCardFlash(toEl);
                 UI.fxBurst(centerInTable(toEl), {});
-                UI.shake(4);
+                UI.shake(3);   // 原版极少震屏，保持克制（view.md 2.14.3）
                 // 受击方：55ms 推出 12% 距离 → 110ms 硬回位（原版无回弹尾巴）
                 gsap.timeline({ overwrite: 'auto' })
                   .to(toEl, {
@@ -1111,19 +1123,18 @@
             const tl = gsap.timeline({
               onComplete: () => { gsap.set(el, { clearProps: 'transform,filter' }); next(); },
             });
-            // ① 落地：从拖拽大卡（1.38x）快速缩回 —— 原版实测仅 2 帧（≈67ms），
-            //    这里拉长到 0.2s 保留"手感"，但保持干脆
+            // ① 落地：原版实测 0.6~0.9s 缓慢落定，且**无回弹、无震屏**（view.md 超雄 2.14.2/2.14.3）
+            //    用 power3.out 减速落位，不做 overshoot
             tl.add(() => UI.fxAfterimage(el, -46), 0)
-              .fromTo(el, { y: -70, scale: 1.34, opacity: 0.6, rotation: -2.5 },
-                { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.2, ease: 'back.out(1.5)' })
-              // ② 落地压扁-回弹（幅度克制，避免卡通化）
-              .to(el, { scaleX: 1.05, scaleY: 0.94, duration: 0.05, ease: 'power4.out' })
-              .to(el, { scaleX: 1, scaleY: 1, duration: 0.13, ease: 'elastic.out(1.2, 0.5)' })
-              // ③ 冲击：小范围尘烟 + 短促硬震 + 细环
+              .fromTo(el, { y: -74, scale: 1.34, opacity: 0.55, rotation: -2.5 },
+                { y: 0, scale: 1, opacity: 1, rotation: 0, duration: 0.58, ease: 'power3.out' })
+              // ② 落定微沉（无回弹，仅极轻下压收势）
+              .to(el, { scaleY: 0.985, scaleX: 1.01, duration: 0.07, ease: 'power2.out' })
+              .to(el, { scaleX: 1, scaleY: 1, duration: 0.1, ease: 'power2.out' })
+              // ③ 冲击：尘烟 + 细环（原版无震屏，去掉 shake）
               .add(() => {
-                UI.fxPuffs(c, { n: 3, spread: 26, life: 0.42 });
+                UI.fxPuffs(c, { n: 4, spread: 30, life: 0.55 });
                 UI.fxCardFlash(el);
-                UI.shake(3);
                 const r = document.createElement('div');
                 r.className = 'ring';
                 r.style.left = c.x + 'px';
@@ -1133,8 +1144,8 @@
               }, '-=0.1')
               // ④ 出场高光渐收
               .fromTo(el, { filter: 'brightness(1.8) saturate(1.2)' },
-                { filter: 'brightness(1) saturate(1)', duration: 0.24, ease: 'power2.out' }, '-=0.26');
-            return 430;
+                { filter: 'brightness(1) saturate(1)', duration: 0.26, ease: 'power2.out' }, '-=0.28');
+            return 720;
           });
         }
       } else if (ev.e === 'turn') {

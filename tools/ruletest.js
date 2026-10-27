@@ -24,10 +24,10 @@ function idOf(name, nation) {
 }
 
 console.log('=== setup tests ===');
-// 1. starting hands: 4 cards each
+// 1. starting hands: 先攻 4 张、后攻 5 张，先攻首回合不额外抽牌
 {
   const g = mkGame(Engine.autoDeck('Germany', db, Engine.makeRng(1)), Engine.autoDeck('Soviet', db, Engine.makeRng(2)));
-  check('starting hands 4 + first turn draw (5/4)', g.players[0].hand.length === 5 && g.players[1].hand.length === 4);
+  check('starting hands 先攻4 / 后攻5（首回合不抽）', g.players[0].hand.length === 4 && g.players[1].hand.length === 5);
   check('turn 1 gives 1 kredit slot', g.players[0].slots === 1 && g.players[0].kredits === 1);
   check('HQ starts at 20 defense', g.players[0].hqDef === 20 && g.players[1].hqDef === 20);
   check('P1 starts', g.current === 0);
@@ -498,6 +498,94 @@ console.log('=== conditional / trigger keywords (playtest report gaps) ===');
     check('飞机可越过敌方前线攻击支援阵线', results.fighter && results.bomber, results);
     check('火炮（射程 2）可越过敌方前线攻击支援阵线', results.artillery, results);
     check('步兵/坦克不能越过敌方前线', !results.infantry && !results.tank, results);
+  }
+}
+
+// ===== 回归：官方反击矩阵 / 冲击 / 伏击每回合一次 / 轰炸机拦截（2026-10 规则修复） =====
+// 注意：deployTest 部署的单位当回合有召唤失调，需 endTurn×2 后才能攻击（回到我方回合）
+console.log('=== official counter-attack matrix ===');
+if (BOMBER && FIGHTER && ARTY && INF) {
+  // ① 轰炸机 vs 轰炸机：防守方轰炸机不反击
+  {
+    const { g, c: bom } = deployTest('bomber-bomber', BOMBER, null);
+    g.endTurn(); g.endTurn();
+    const e = new Engine.CardInst(BOMBER, 1, g); e.loc = 'board'; g.players[1].board.push(e);
+    const before = bom.defense;
+    g.attack(0, bom.uid, e.uid);
+    check('轰炸机攻击轰炸机不吃反击（防守方轰炸机不反击）', bom.defense === before, { before, after: bom.defense });
+  }
+  // ② 战斗机 vs 炮兵：防守方炮兵不反击
+  {
+    const { g, c: fig } = deployTest('fig-arty', FIGHTER, null);
+    g.endTurn(); g.endTurn();
+    const e = new Engine.CardInst(ARTY, 1, g); e.loc = 'board'; g.players[1].board.push(e);
+    const before = fig.defense;
+    g.attack(0, fig.uid, e.uid);
+    check('战斗机攻击炮兵不吃反击（防守方炮兵不反击）', fig.defense === before, { before, after: fig.defense });
+  }
+  // ③ 轰炸机 vs 战斗机：战斗机反击，轰炸机吃反击
+  {
+    const { g, c: bom } = deployTest('bomber-fig', BOMBER, null);
+    g.endTurn(); g.endTurn();
+    const e = new Engine.CardInst(FIGHTER, 1, g); e.loc = 'board'; g.players[1].board.push(e);
+    const before = bom.defense;
+    g.attack(0, bom.uid, e.uid);
+    check('轰炸机攻击战斗机吃反击（战斗机可反击轰炸机）', bom.defense < before || e.defense <= 0, { atkAfter: bom.defense, defAfter: e.defense });
+  }
+  // ④ 战斗机 vs 战斗机：互殴
+  {
+    const { g, c: fig } = deployTest('fig-fig', FIGHTER, null);
+    g.endTurn(); g.endTurn();
+    const e = new Engine.CardInst(FIGHTER, 1, g); e.loc = 'board'; g.players[1].board.push(e);
+    const aBefore = fig.defense, dBefore = e.defense;
+    g.attack(0, fig.uid, e.uid);
+    check('战斗机互殴双方均受伤', fig.defense < aBefore && e.defense < dBefore, { aAfter: fig.defense, dAfter: e.defense });
+  }
+  // ⑤ 轰炸机拦截：战斗机本身就是合法目标（拦截只挡非战斗机目标）
+  {
+    const { g, c: bom } = deployTest('bomber-intercept', BOMBER, null);
+    const fig = new Engine.CardInst(FIGHTER, 1, g); fig.loc = 'board'; g.players[1].board.push(fig);
+    check('轰炸机可以直接攻击战斗机本身', g.attackTargets(bom).includes(fig.uid));
+  }
+}
+
+console.log('=== shock ===');
+{
+  const SHOCK = db.cards.find(c => c.keywords.includes('shock') && c.type !== 'order' && c.cost <= 4 && (c.attack || 0) > 0);
+  if (SHOCK && INF) {
+    const { g, c: s } = deployTest('shock', SHOCK, null);
+    g.endTurn(); g.endTurn();
+    // 射程 1 的坦克需推进到前线才能攻击前线目标
+    const su = g.find(s.uid);
+    if (g.canMove(su, true)) g.move(0, su.uid, true);
+    const e = new Engine.CardInst(INF, 1, g); e.loc = 'front'; g.frontline.push(e);
+    const aBefore = su.defense, dBefore = e.defense;
+    g.attack(0, su.uid, e.uid);
+    check('冲击：被攻击单位不反击', su.defense === aBefore, { aAfter: su.defense });
+    check('冲击：攻击方先手造成伤害', e.defense < dBefore || e.loc === 'discard', { dAfter: e.defense });
+    check('冲击：用后关键词移除', !su.keywords.has('shock'));
+  }
+}
+
+console.log('=== ambush once per turn ===');
+{
+  const AMB = db.cards.find(c => c.keywords.includes('ambush') && c.type !== 'order' && c.cost <= 4);
+  if (AMB && FIGHTER && ARTY) {
+    // 防守方 = 伏击坦克：第一击触发伏击；同回合第二个攻击者不再触发
+    const g = mkGame([FIGHTER.id, ARTY.id], [AMB.id]);
+    const p = g.players[0];
+    p.deck = []; p.hand = [];
+    p.kredits = 20; p.slots = 12;
+    const a1 = new Engine.CardInst(FIGHTER, 0, g); a1.loc = 'board'; p.board.push(a1);
+    const a2 = new Engine.CardInst(ARTY, 0, g); a2.loc = 'board'; p.board.push(a2);
+    const d = new Engine.CardInst(AMB, 1, g); d.loc = 'board'; g.players[1].board.push(d);
+    const a1Before = a1.defense;
+    g.attack(0, a1.uid, d.uid);
+    const ambushHit = a1.defense < a1Before || a1.loc === 'discard';
+    const a2Before = a2.defense;
+    g.attack(0, a2.uid, d.uid);
+    check('伏击：每回合仅首次被攻击时触发（第一击）', ambushHit, { a1After: a1.defense, a1Loc: a1.loc });
+    check('伏击：同回合第二次被攻击不再触发', a2.defense === a2Before || d.loc === 'discard', { a2After: a2.defense, dLoc: d.loc });
   }
 }
 
