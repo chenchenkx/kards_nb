@@ -88,9 +88,15 @@
     }
     get totalDefense() { return this.defense + this.buffDefense; }
     /** 实际出牌费用：支持手牌费用增减（_costMod）、Develop 免费等 */
-    get effCost() { return Math.max(0, (this.cost || 0) + (this._costMod || 0)); }
+    get effCost() {
+      let c = (this.cost || 0) + (this._costMod || 0) + (this._costBase || 0);
+      const g = this._game;
+      if (g && g.costCalcOf) c += g.costCalcOf(this);
+      return Math.max(0, c);
+    }
     /** 实际行动费用：支持临时设定（_opCostSet）与增减（_opCostMod） */
     get effOpCost() {
+      if (this._opCostZero) return 0;
       if (this._opCostSet != null) return Math.max(0, this._opCostSet);
       const g = this._game;
       const aura = (g && g.teamAuraFor) ? g.teamAuraFor(this, 'operate') : 0;
@@ -155,6 +161,12 @@
         if (k === 'show when drawn') {
           const o = parseOps(body);
           if (o.length) { clauses.push({ kind: 'trigger', event: 'showWhenDrawn', text: sent, cond: null, ops: o }); continue; }
+        }
+        // "Pincer: When this unit is destroyed, ..."（T-28）—— 授予亡计而非立即执行
+        if (k === 'pincer' && /^when this unit is destroyed,/i.test(body)) {
+          const rest = body.replace(/^when this unit is destroyed,?\s*/i, '');
+          const o = parseOps(rest);
+          if (o.length) { clauses.push({ kind: 'pincer', text: sent, cond: null, ops: [{ op: 'grantSelfDestruction', ops: o }] }); continue; }
         }
       }
       const clause = { kind, text: sent, cond: null, ops: parseOps(body) };
@@ -279,6 +291,21 @@
   function op_maxCostOf(t) {
     const m = /costs? (\d+) or less/i.exec(String(t || ''));
     return m ? +m[1] : null;
+  }
+
+  /** 从卡面文本推导动态费用修正（effCost 在手牌里就要用到，不能等部署时执行） */
+  function costCalcFromText(t) {
+    const s = String(t || '');
+    const out = [];
+    let m = /costs? (\d+) less to deploy for each of your units/i.exec(s);
+    if (m) out.push({ kind: 'perUnit', n: +m[1] });
+    m = /costs? (\d+) less for each (german|soviet|american|british|japanese|french|italian|polish|finnish|us) unit you control/i.exec(s);
+    if (m) out.push({ kind: 'perNationUnit', n: +m[1], nation: NAT_MAP[m[2].toLowerCase()] || m[2] });
+    m = /costs? (\d+) less to deploy if you control a unit with (\d+) or more operation cost/i.exec(s);
+    if (m) out.push({ kind: 'ifControlOpCost', n: +m[1], op: +m[2] });
+    m = /costs? (\d+) more to deploy if you started the battle/i.exec(s);
+    if (m) out.push({ kind: 'startedBattle', n: +m[1] });
+    return out;
   }
 
   function dmgTargetOf(s) {
@@ -478,7 +505,15 @@
           const last = [...a].reverse().find(o => o.op === 'buff' || o.op === 'keyword');
           if (last) b = [{ op: 'keyword', kws: [bareKw[1].toLowerCase()], target: last.target || 'unit', filters: last.filters || null, temp: /this turn/i.test(comp[2]) }];
         }
-        if (a.length && b.length) return a.concat(b);
+        if (a.length && b.length) {
+          // 复合句提前返回时也要把 "if <条件>" 挂到两半上（否则前半段的 buff 会无条件生效）
+          if (/\bif\b/i.test(t0)) {
+            const cp = t0.split(/\bif\b/i);
+            const cc = parseCondTail(cp.slice(1).join(' if '));
+            if (cc) for (const o of a.concat(b)) if (!o.cond) o.cond = cc;
+          }
+          return a.concat(b);
+        }
       }
     }
     if (/\bif\b/i.test(t0)) {
@@ -523,6 +558,7 @@
     if (/highest attack/.test(t)) return { key: 'highestOwnAttack' };
     if (/german tanks in the frontline/.test(t)) return { key: 'germanTankCost' };
     if (/its attack|this unit's attack/.test(t)) return { key: 'atk' };
+    if (/kredit slots you have lost/.test(t)) return { key: 'slotsLost' };
     if (/kredits spent/.test(t)) return { key: 'kreditsSpent' };
     if (/cards? in your hand/.test(t)) return { key: 'ownHandSize' };
     if (/number of (?:your |friendly )?units|friendly units you (?:control|have)/.test(t)) return { key: 'ownUnitCount' };
@@ -624,7 +660,7 @@
     m = /it gains (\d+) extra defense/i.exec(t);
     if (m) return [{ op: 'hqHealBonus', n: +m[1] }];
     // 阵亡后回到牌库顶（T-28）
-    if (/put it on top of (?:owner's |its owner's )?deck/i.test(t)) return [{ op: 'toDeckTop' }];
+    if (/put it on top of (?:owner's |its owner's )?deck/i.test(t) && !/^when this unit is destroyed/i.test(t)) return [{ op: 'toDeckTop' }];
     if (/put (?:target|a|an|the enemy) unit on top of (?:its |the )?owner'?s? deck/i.test(t)) return [{ op: 'toDeckTopTarget', target: 'enemyUnit' }];
     // 抽一张弃一张（34th INFANTRY REGIMENT）
     if (/draw and discard the top card/i.test(t)) return [{ op: 'cycleTop' }];
@@ -839,6 +875,66 @@
       ops.push({ op: 'addHand', name: m[2].trim(), random: true, count: n });
       return ops;
     }
+
+    // ================= 钳形附加效果（v44 第四批） =================
+    if (/damage dealt to this unit is dealt to its pincer partner instead/i.test(t)) { ops.push({ op: 'pincerRedirect' }); return ops; }
+    if (/units dealt combat damage by this unit are destroyed/i.test(t)) { ops.push({ op: 'destroyOnDamage' }); return ops; }
+    if (/^at the end of your turn, fully repair this unit\.?$/i.test(t)) { ops.push({ op: 'grantEndOfTurnHeal' }); return ops; }
+    if (/^when this unit is destroyed, put it on top of owner'?s? deck\.?$/i.test(t)) {
+      ops.push({ op: 'grantSelfDestruction', ops: [{ op: 'toDeckTop' }] }); return ops;
+    }
+
+    // ================= 动态费用（v44 第三批） =================
+    // "Costs 1 less to deploy for each of your units."（122nd KORSUN）
+    m = /costs? (\d+) less to deploy for each of your units/i.exec(t);
+    if (m) { ops.push({ op: 'costCalc', kind: 'perUnit', n: +m[1] }); return ops; }
+    // "Costs 1 less for each US unit you control."（A-20B）
+    m = /costs? (\d+) less for each (german|soviet|american|british|japanese|french|italian|polish|finnish|us) unit you control/i.exec(t);
+    if (m) { ops.push({ op: 'costCalc', kind: 'perNationUnit', n: +m[1], nation: NAT_MAP[m[2].toLowerCase()] || m[2] }); return ops; }
+    // "Costs 3 less to deploy if you control a unit with 3 or more operation cost."（B-24D）
+    m = /costs? (\d+) less to deploy if you control a unit with (\d+) or more operation cost/i.exec(t);
+    if (m) { ops.push({ op: 'costCalc', kind: 'ifControlOpCost', n: +m[1], op: +m[2] }); return ops; }
+    // "Costs 1 more to deploy if you started the battle."（185th FOLGORE）
+    m = /costs? (\d+) more to deploy if you started the battle/i.exec(t);
+    if (m) { ops.push({ op: 'costCalc', kind: 'startedBattle', n: +m[1] }); return ops; }
+    // "Units that did not start in your deck cost 2 less to deploy."（93rd MESSINA）
+    m = /units that did not start in your deck cost (\d+) less to deploy/i.exec(t);
+    if (m) { ops.push({ op: 'notFromDeckDiscount', n: +m[1] }); return ops; }
+    // "Has Blitz and operates for free if you have played an Exile card this turn."（M4 SHERMAN PL）
+    if (/has blitz and operates for free if you have played an exile card this turn/i.test(t)) {
+      ops.push({ op: 'situational', kw: 'blitz', cond: { c: 'exilePlayedThisTurn' } });
+      ops.push({ op: 'situational', opCostZero: true, cond: { c: 'exilePlayedThisTurn' } });
+      return ops;
+    }
+    // "Has Blitz and 0 operation cost if Sunny or Rain was played this turn."（6th MARINE REGIMENT）
+    if (/has blitz and 0 operation cost if sunny or rain was played this turn/i.test(t)) {
+      ops.push({ op: 'situational', kw: 'blitz', cond: { c: 'weatherPlayedThisTurn' } });
+      ops.push({ op: 'situational', opCostZero: true, cond: { c: 'weatherPlayedThisTurn' } });
+      return ops;
+    }
+
+    // ================= 光环 / 费用 / 抗性（v44 第二批） =================
+    // "Your LIGHT INFANTRY units have Alpine."（67th BARANOVICHI）
+    m = /^your ([A-Z][A-Za-z0-9'\- ]{2,30}) units? have (blitz|guard|fury|smokescreen|ambush|shock|alpine|pincer)$/i.exec(t);
+    if (m) { ops.push({ op: 'teamKeyword', kw: m[2].toLowerCase(), name: m[1].trim() }); return ops; }
+    // "Also counts as a tank."（SAVOIA CAVALLERIA）
+    m = /^also counts as an? (infantry|tank|artillery|fighter|bomber)$/i.exec(t);
+    if (m) { ops.push({ op: 'countsAs', type: m[1].toLowerCase() }); return ops; }
+    // "Damage dealt to your HQ is reduced by 1."（593rd JASCO）
+    m = /damage dealt to your hq is reduced by (\d+)/i.exec(t);
+    if (m) { ops.push({ op: 'hqDmgReduce', n: +m[1] }); return ops; }
+    // "Order damage to a friendly unit is reduced by its Heavy Armor."（KV-2）
+    if (/order damage to a friendly unit is reduced by its heavy armor/i.test(t)) { ops.push({ op: 'orderDmgArmor' }); return ops; }
+    // "Your non-targeting deployment effects trigger twice."（B-26 MARAUDER）
+    if (/non-targeting deployment effects trigger twice/i.test(t)) { ops.push({ op: 'deployTwice' }); return ops; }
+    // "Deployment effects do not trigger."（PETLYAKOV Pe-2FT）
+    if (/^deployment effects do not trigger$/i.test(t)) { ops.push({ op: 'noDeployEffects' }); return ops; }
+    // "Pincer: +1 Heavy Armor."（STUG III G SCHÜRZEN）
+    m = /^\+(\d+) heavy armor\.?$/i.exec(t);
+    if (m) { ops.push({ op: 'addHeavyArmor', n: +m[1] }); return ops; }
+    // 裸关键词（Pincer: Ambush.）
+    m = /^(blitz|guard|fury|smokescreen|ambush|shock|alpine)$/i.exec(t.replace(/\.$/, '').trim());
+    if (m) { ops.push({ op: 'keyword', kws: [m[1].toLowerCase()], target: 'self', self: true }); return ops; }
 
     // ================= 事件效果指向（v44） =================
     if (/\bit becomes veteran if able\b/i.test(t)) { ops.push({ op: 'veteran', target: 'deployed' }); return ops; }
@@ -1147,6 +1243,13 @@
       return ops;
     }
 
+    // Destruction 小效果（388th / FUKUOKA / KURUME / TAKASAKI）
+    if (/^the enemy draws? (?:a|one|\d+) cards?\.?$/i.test(t)) { ops.push({ op: 'enemyDraw', n: /\d+/.test(t) ? +/(\d+)/.exec(t)[1] : 1 }); return ops; }
+    if (/^(?:your )?enemy discards? a card\.?$/i.test(t)) { ops.push({ op: 'enemyDiscard', n: 1 }); return ops; }
+    if (/^the enemy gains? an extra kredit slot\.?$/i.test(t)) { ops.push({ op: 'slots', n: 1, side: 'enemy' }); return ops; }
+    if (/^end the turn\.?$/i.test(t)) { ops.push({ op: 'endTurn' }); return ops; }
+    // "All friendly units retreat"（L6/40）
+    if (/all friendly units retreat/i.test(t)) { ops.push({ op: 'retreat', target: 'allFriendly' }); return ops; }
     // "Retreat [target] unit" / "Target enemy unit retreats"
     if (/\bretreat/i.test(t)) {
       let tgt = 'unit';
@@ -1195,7 +1298,15 @@
       return ops;
     }
 
-    // "Deployment: Add to your support line two 59. PANZERGRENADIER with Blitz."（倒装：位置在前）
+    // "Shuffle 4 KAMIKAZE cards into your deck."（KIKKA）
+    let sd = /shuffle (\d+|two|three|four) ([A-Z][A-Z0-9'\-\., ]*?) cards? into your deck/i.exec(t);
+    if (sd) {
+      const n = sd[1] === 'two' ? 2 : sd[1] === 'three' ? 3 : sd[1] === 'four' ? 4 : +sd[1];
+      ops.push({ op: 'addDeck', name: sd[2].trim(), count: n });
+      return ops;
+    }
+
+    // "Add to your support line two 59. PANZERGRENADIER with Blitz."（倒装：位置在前）
     let sp2 = /add to (?:the |your )?(support line|frontline|battlefield) (a |an |one |two |three )?([A-Z0-9'\-\.,\/ ]+?)(?: with [A-Za-z ]+)?\.?$/i.exec(t);
     if (sp2) {
       const w = (sp2[2] || '').trim().toLowerCase();
@@ -1692,6 +1803,7 @@
     { re: /this unit is dealt damage\b|^this unit takes damage\b/i, ev: 'selfDamaged' },
     { re: /this unit (?:is destroyed|dies)\b/i, ev: 'selfDestroy' },
     { re: /this unit moves? into the frontline\b/i, ev: 'selfMoveFront' },
+    { re: /an? enemy unit moves? into the frontline\b/i, ev: 'enemyMoveFront' },
     { re: /a friendly (?:german|soviet|british|american|japanese|french|italian|polish|finnish) unit moves? into the frontline\b/i,
       ev: 'allyMoveFront',
       cond: m => {
@@ -1793,7 +1905,7 @@
     const once = /^once per turn\b/i.test(String(raw || ''));
     // 触发效果里没写明目标时，增益类默认作用于自身；伤害/摧毁类保持通用目标解析
     const isDeployEv = /^(ownDeploy|ownGuardDeploy)$/.test(event);
-    const isEventEv = /^(unitPinned|unitRetreated|unitDestroyed|allyMoveFront)$/.test(event);
+    const isEventEv = /^(unitPinned|unitRetreated|unitDestroyed|allyMoveFront|enemyMoveFront)$/.test(event);
     for (const o of ops) {
       if (!['buff', 'keyword', 'buffPer', 'opCostMod'].includes(o.op)) continue;
       if (isDeployEv && /^(give it|it gets|gets|it gains)\b/i.test(eff)) { o.target = 'deployed'; o.self = false; continue; }
@@ -1955,6 +2067,14 @@
       }
       case 'unitDestroyedThisTurn': return (game._destroyedThisTurn || []).some(x => x.turn === game.turn);
       case 'handEmpty': return (card ? game.players[card.owner] : game.players[game.current]).hand.length === 0;
+      case 'exilePlayedThisTurn': {
+        const sideX = card ? card.owner : game.current;
+        return !!(game.players[sideX]._exilePlayedTurn === game.turn);
+      }
+      case 'weatherPlayedThisTurn': {
+        const sideW = card ? card.owner : game.current;
+        return !!(game.players[sideW]._weatherPlayedTurn === game.turn);
+      }
       case 'deployedOnlyThisTurn': return (game.players[card ? card.owner : game.current]._deployCountTurn === game.turn)
         && (game.players[card ? card.owner : game.current]._deployCount === 1);
       case 'attackAtLeast': return card && card.totalAttack >= (cond.n || 0);
@@ -2350,6 +2470,10 @@
         }
       }
       const p = this.players[side];
+      // "Damage dealt to your HQ is reduced by 1"（593rd JASCO）
+      if (!isFatigue && p._hqDmgReduce) {
+        amount = Math.max(1, amount - p._hqDmgReduce);
+      }
       // 临时护甲先吸收（hqBuff）
       if (!isFatigue && p.hqArmor > 0) {
         const absorbed = Math.min(p.hqArmor, amount);
@@ -2402,7 +2526,20 @@
     damageCard(c, amount, killer) {
       if (!c || amount <= 0) return;
       if (c._immune) { this.log(`${c.name} 免疫伤害`); return; }
-      // 伤害转移：友方有单位声明"对本卡的伤害转移给它"
+      // "Order damage to a friendly unit is reduced by its Heavy Armor."（KV-2）
+      if (killer && killer.type === 'order' && this.players[c.owner]._orderDmgArmor && (c.heavyArmor || 0) > 0) {
+        amount = Math.max(1, amount - c.heavyArmor);
+      }
+      // 钳形伤害转移（KING'S OWN SCOTTISH）
+      if (c._pincerPartner && !c._redirected && c._pincerPartner.loc !== 'discard' && c._pincerPartner.uid !== c.uid) {
+        this.log(`${c.name} 受到的 ${amount} 点伤害转移给钳形伙伴 ${c._pincerPartner.name}`);
+        const pn = c._pincerPartner;
+        c._redirected = true;
+        this.damageCard(pn, amount, killer);
+        c._redirected = false;
+        return;
+      }
+      // 伤害转移：友方有单位声明"对本卡的伤害转移给它
       if (!c._redirected) {
         const guard = this.unitsOf(c.owner).find(u => u !== c && u._redirectName
           && c.name.toLowerCase().includes(u._redirectName.toLowerCase()));
@@ -2609,6 +2746,7 @@
         p.board.push(c);
         this.sortBoard(p.board);
         this.log(`${c.name} 部署至支援阵线`);
+        if (c.has && c.has('exile')) p._exilePlayedTurn = this.turn;
         // 本回合部署计数（"if this was the only unit you deployed"）
         if (p._deployCountTurn !== this.turn) { p._deployCountTurn = this.turn; p._deployCount = 0; }
         p._deployCount = (p._deployCount || 0) + 1;
@@ -2618,11 +2756,19 @@
       if (c.isUnit) p._unitDeployedThisTurn = true;
       // deployment effects
       const ctx = { fromLeftmost, fromRightmost, target: opts.target || null };
-      this.execCardText(c, 'deployment', ctx);
+      // "Deployment effects do not trigger."（PETLYAKOV Pe-2FT）：场上有该单位时抑制部署效果
+      const suppressDeploy = [...this.unitsOf(0), ...this.unitsOf(1)].some(u => u._noDeployEffects && u.uid !== c.uid);
+      if (!suppressDeploy) {
+        // "Your non-targeting deployment effects trigger twice."（B-26 MARAUDER）
+        const twice = p._deployTwice && !ctx.target;
+        this.execCardText(c, 'deployment', ctx);
+        if (twice) this.execCardText(c, 'deployment', ctx);
+      }
       this.execCardText(c, 'static', ctx);
-      // Pincer：本回合第 2 张及以上的卡才触发
+      // Pincer：本回合第 2 张及以上的卡才触发（partner = 本回合上一张钳形卡）
       p.playedThisTurn = (p.playedThisTurn || 0) + 1;
-      if (p.playedThisTurn >= 2) this.execCardText(c, 'pincer', ctx);
+      if (p.playedThisTurn >= 2) this.execCardText(c, 'pincer', { ...(ctx || {}), partner: p._lastPincer || null });
+      if (c.has && c.has('pincer')) p._lastPincer = c;
       this.applyAuras();
       // 本回合禁止部署（U-48）
       if (p._noDeployTurns > 0) { /* 由 canPlay 拦截，这里仅兜底 */ }
@@ -2655,6 +2801,9 @@
         this.fireTrigger('selfMoveFront', { uid: c.uid }, u => u.uid === c.uid);
         this.fireTrigger('allyMoveFront', { uid: c.uid, owner: c.owner, type: c.type, nation: c.nation, attack: c.totalAttack, card: c },
           u => u.owner === c.owner && u.uid !== c.uid);
+        // "When an enemy unit moves into the frontline, ..."（35th INF / 37mm BOFORS / PZL P.7）
+        this.fireTrigger('enemyMoveFront', { uid: c.uid, owner: c.owner, type: c.type, nation: c.nation, attack: c.totalAttack, card: c },
+          u => u.owner !== c.owner);
       }
       return { ok: true };
     }
@@ -2959,7 +3108,10 @@
         atk._pinned = true; this.log(`${atk.name}（空军）被 ${def.name} 压制`);
       }
       if (!defDies) {
-        if (atk._destroyTanksOnDamage && def.type === 'tank') {
+        if (atk._destroyOnDamage && dToDef > 0) {
+          this.log(`${atk.name} 摧毁了受到战斗伤害的 ${def.name}`);
+          this.destroyCard(def, atk);
+        } else if (atk._destroyTanksOnDamage && def.type === 'tank') {
           this.log(`${atk.name} 摧毁了受损的坦克 ${def.name}`);
           this.destroyCard(def, atk);
         } else {
@@ -3082,6 +3234,25 @@
      * 先撤掉上次贡献，再按当前位置重算，避免重复叠加。
      */
     /** 队伍级光环查询：返回 card 在 kind（operate/deploy）上的费用增减 */
+    /** 动态部署费用修正（"每有一个我方单位就少 1" / "未在起始牌库的卡少 2" 等） */
+    costCalcOf(card) {
+      const p = this.players[card.owner];
+      if (!p) return 0;
+      let d = 0;
+      const ccs = (card._costCalc && card._costCalc.length) ? card._costCalc : costCalcFromText(card.text);
+      for (const cc of ccs) {
+        if (cc.kind === 'perUnit') d -= (cc.n || 1) * this.unitsOf(card.owner).length;
+        else if (cc.kind === 'perNationUnit') d -= (cc.n || 1) * this.unitsOf(card.owner).filter(u => u.nation === cc.nation).length;
+        else if (cc.kind === 'ifControlOpCost') {
+          if (this.unitsOf(card.owner).some(u => u.effOpCost >= (cc.op || 3))) d -= cc.n || 1;
+        } else if (cc.kind === 'startedBattle') {
+          if (card.owner === 0) d += cc.n || 1;   // 先攻方（P1）视为发起战斗方
+        }
+      }
+      if (p._notFromDeckDiscount && card._notFromDeck) d -= p._notFromDeckDiscount;
+      return d;
+    }
+
     teamAuraFor(card, kind) {
       if (!card || !card.isUnit) return 0;
       let d = 0;
@@ -3104,6 +3275,31 @@
 
     applyAuras() {
       const all = [...this.unitsOf(0), ...this.unitsOf(1)];
+      // 关键词光环（"Your LIGHT INFANTRY units have Alpine"）：先撤掉上一轮授予
+      for (const u of all) {
+        if (u._auraKws && u._auraKws.size) { for (const k of u._auraKws) u.keywords.delete(k); u._auraKws.clear(); }
+      }
+      for (const u of all) {
+        for (const it of (u._sit || [])) {
+          const ok = it.cond ? evalCond(it.cond, this, u, {}) : true;
+          if (it.kw) {
+            if (ok) { u.keywords.add(it.kw); (u._auraKws = u._auraKws || new Set()).add(it.kw); }
+          }
+          if (it.opCostZero) u._opCostZero = ok;
+        }
+      }
+      for (const src of all) {
+        for (const a of (src._teamAuras || [])) {
+          if (a.kind !== 'keyword' || !a.kw) continue;
+          for (const u of all) {
+            if (a.side === 'enemy' ? u.owner === src.owner : u.owner !== src.owner) continue;
+            if (a.f && a.f.name && !new RegExp(a.f.name, 'i').test(u.name)) continue;
+            if (a.f && a.f.type && u.type !== a.f.type) continue;
+            u.keywords.add(a.kw);
+            (u._auraKws = u._auraKws || new Set()).add(a.kw);
+          }
+        }
+      }
       for (const u of all) {
         if (u._auraTaken) { u._opCostMod = (u._opCostMod || 0) - u._auraTaken; u._auraTaken = 0; }
       }
@@ -3946,6 +4142,7 @@
               case 'kreditsSpent': return this.players[me].kreditsSpent || 0;
               case 'ownUnitCount': return this.unitsOf(me).length;
               case 'kredits': return this.players[me].kredits || 0;
+              case 'slotsLost': return Math.max(0, (RULES.MAX_KREDITS || 12) - this.players[me].slots);
               case 'ownHandSize': return this.players[me].hand.length;
               case 'highestOwnAttack': return this.unitsOf(me).reduce((a, u) => Math.max(a, u.totalAttack), 0);
               case 'atk': return src.totalAttack || 0;
@@ -4428,6 +4625,17 @@
           break;
         }
         case 'retreat': {
+          if (op.target === 'allFriendly') {
+            for (const u of this.frontline.filter(x => x.owner === me)) {
+              if (u._noRetreat) continue;
+              this.frontline.splice(this.frontline.indexOf(u), 1);
+              if (!this.frontline.length) this.frontlineOwner = -1;
+              u.loc = 'board'; this.players[u.owner].board.push(u);
+              this.log(`${u.name} 撤退`);
+              this.fireTrigger('unitRetreated', { uid: u.uid, owner: u.owner, type: u.type, card: u }, () => true);
+            }
+            break;
+          }
           let t = pickUnit(op.target);
           if (!t) break;
           if (t._noRetreat) { this.log(`${t.name} 无法撤退`); break; }
@@ -4483,6 +4691,7 @@
           const c = new CardInst(def, me, this);
           if (op.op === 'addHand') {
             c.loc = 'hand';
+            c._notFromDeck = true;
             if (this.players[me].hand.length < RULES.MAX_HAND) this.players[me].hand.push(c);
             else this.players[me].discard.push(c);
             this.log(`${c.name} 加入手牌`);
@@ -4699,6 +4908,81 @@
           this.log('双方各抽一张牌');
           break;
         }
+        case 'grantSelfDestruction': {
+          (src._granted = src._granted || []).push({ kind: 'destruction', ops: op.ops || [] });
+          this.log(`${src.name} 获得亡计效果`);
+          break;
+        }
+        case 'pincerRedirect': {
+          // "Pincer: Damage dealt to this unit is dealt to its Pincer partner instead."（KING'S OWN SCOTTISH）
+          const partner = ctx && ctx.partner;
+          if (partner && partner.uid !== src.uid && partner.loc !== 'discard') {
+            src._pincerPartner = partner;
+            this.log(`${src.name} 与 ${partner.name} 建立钳形伤害转移`);
+          }
+          break;
+        }
+        case 'destroyOnDamage': {
+          src._destroyOnDamage = true;
+          this.log(`${src.name} 造成战斗伤害的单位会被摧毁`);
+          break;
+        }
+        case 'grantEndOfTurnHeal': {
+          (src._granted = src._granted || []).push({ kind: 'trigger', event: 'endOfTurn', ops: [{ op: 'heal', target: 'self' }] });
+          this.log(`${src.name} 获得回合结束自愈`);
+          break;
+        }
+        case 'costCalc': {
+          src._costCalc = src._costCalc || [];
+          src._costCalc.push({ kind: op.kind, n: op.n, nation: op.nation, op: op.op });
+          break;
+        }
+        case 'notFromDeckDiscount': {
+          this.players[me]._notFromDeckDiscount = op.n || 1;
+          break;
+        }
+        case 'situational': {
+          src._sit = src._sit || [];
+          src._sit.push({ kw: op.kw, opCostZero: !!op.opCostZero, cond: op.cond });
+          this.applyAuras();
+          break;
+        }
+        case 'teamKeyword': {
+          src._teamAuras = src._teamAuras || [];
+          src._teamAuras.push({ kind: 'keyword', kw: op.kw, f: { name: op.name || '' } });
+          this.applyAuras();
+          this.log(`我方 ${op.name} 单位获得 ${op.kw}`);
+          break;
+        }
+        case 'countsAs': {
+          src._countsAs = op.type;
+          if (!src.has(op.type)) src.keywords.add('countsas:' + op.type);
+          this.log(`${src.name} 同时视为 ${op.type}`);
+          break;
+        }
+        case 'hqDmgReduce': {
+          this.players[me]._hqDmgReduce = (this.players[me]._hqDmgReduce || 0) + (op.n || 1);
+          break;
+        }
+        case 'orderDmgArmor': {
+          this.players[me]._orderDmgArmor = true;
+          break;
+        }
+        case 'deployTwice': {
+          this.players[me]._deployTwice = true;
+          this.log('非指向部署效果触发两次');
+          break;
+        }
+        case 'noDeployEffects': {
+          src._noDeployEffects = true;
+          this.log('部署效果不触发');
+          break;
+        }
+        case 'addHeavyArmor': {
+          src.heavyArmor = (src.heavyArmor || 0) + (op.n || 1);
+          this.log(`${src.name} 重甲 +${op.n || 1}（当前 ${src.heavyArmor}）`);
+          break;
+        }
         case 'damageEachHq': {
           this.damageHq(0, op.n, src);
           this.damageHq(1, op.n, src);
@@ -4723,6 +5007,27 @@
           if (src.loc === 'front') { nc.loc = 'front'; this.frontline.push(nc); if (this.frontlineOwner === -1) this.frontlineOwner = me; }
           else { nc.loc = 'board'; this.players[me].board.push(nc); }
           this.log(`${nc.name} 加入同一战线`);
+          break;
+        }
+        case 'enemyDraw': {
+          this.draw(foe, op.n || 1, true);
+          this.log(`敌方抽 ${op.n || 1} 张`);
+          break;
+        }
+        case 'enemyDiscard': {
+          const p2 = this.players[foe];
+          for (let i = 0; i < (op.n || 1); i++) {
+            if (!p2.hand.length) break;
+            const c2 = this.rng.pick(p2.hand);
+            p2.hand.splice(p2.hand.indexOf(c2), 1);
+            c2.loc = 'discard'; p2.discard.push(c2);
+            this.log(`敌方随机弃掉 ${c2.name}`);
+          }
+          break;
+        }
+        case 'endTurn': {
+          this.log('回合立即结束');
+          this.endTurn();
           break;
         }
         case 'heal': {
@@ -5089,7 +5394,9 @@
         }
         case 'weather': {
           const names = { sun: '晴天', storm: '风暴', rain: '降雨' };
-          this.log(`天气：${names[op.kind] || '变化'}（本模拟不含天气联动）`);
+          this.players[me]._weatherPlayedTurn = this.turn;
+          this.players[me]._weatherKind = op.kind;
+          this.log(`天气：${names[op.kind] || '变化'}`);
           break;
         }
         case 'reveal': {
