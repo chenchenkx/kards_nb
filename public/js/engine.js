@@ -4144,13 +4144,16 @@
     const maxCopies = RARITY_LIMITS;
     let allyUsed = 0;
     const counts = {};
+    // 同名同属性卡（_cam1/_blank 战役变体）共用一个计数桶，避免卡组里叠出 4+ 张同款
+    const cardKey = (c) => c.name + '|' + c.type + '|' + c.cost + '|' + (c.attack || 0) + '|' + (c.defense || 0);
     const add = (c) => {
       if (!c) return false;
       const max = maxCopies[c.rarity] || 2;
-      if ((counts[c.id] || 0) >= max) return false;
+      const k = cardKey(c);
+      if ((counts[k] || 0) >= max) return false;
       // 副国卡上限 12 张
       if (ally && c.nation === ally && allyUsed >= ALLY_CARD_LIMIT) return false;
-      counts[c.id] = (counts[c.id] || 0) + 1;
+      counts[k] = (counts[k] || 0) + 1;
       if (ally && c.nation === ally) allyUsed++;
       return true;
     };

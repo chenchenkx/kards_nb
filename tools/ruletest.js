@@ -589,5 +589,27 @@ console.log('=== ambush once per turn ===');
   }
 }
 
+console.log('=== heavy armor ===');
+{
+  // 官方 raw.heavyArmor 恢复后的回归：3 攻打重甲 2 单位 → 只造成 1 点
+  const armored = db.cards.find(c => (c.heavyArmor || 0) === 2 && c.type === 'tank');
+  const plain = db.cards.find(c => c.type === 'tank' && c.attack === 3 && !(c.text || '').trim() && c.cost <= 3);
+  if (armored && plain) {
+    const g = mkGame([plain.id], [armored.id]);
+    const p = g.players[0];
+    p.deck = []; p.hand = []; p.kredits = 20; p.slots = 12;
+    const a = new Engine.CardInst(plain, 0, g); a.loc = 'front'; a.summonedTurn = -1; a.hasAttacked = false; a.attacksLeft = 1;
+    g.frontline.push(a); g.frontlineOwner = 0;
+    const d = new Engine.CardInst(armored, 1, g); d.loc = 'front'; d.summonedTurn = 0;
+    g.frontline.push(d);
+    const before = d.defense;
+    g.attack(0, a.uid, d.uid);
+    check('重甲 2 吸收 2 点战斗伤害', before - d.defense === Math.max(0, a.totalAttack - 2),
+      { atk: a.totalAttack, armored: armored.name, loss: before - d.defense });
+    check('重甲字段已恢复（共 52 张）', db.cards.filter(c => (c.heavyArmor || 0) > 0).length >= 50,
+      { count: db.cards.filter(c => (c.heavyArmor || 0) > 0).length });
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

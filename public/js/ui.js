@@ -132,6 +132,14 @@
     nameTag.className = 'card-nametag';
     el.appendChild(nameTag);
 
+    // 无卡图卡的占位卡面（90 张法国抵抗军/特殊卡没有素材）
+    const fallback = document.createElement('div');
+    fallback.className = 'card-fallback';
+    fallback.innerHTML = `<span class="cf-name"></span><span class="cf-type"></span>`;
+    fallback.querySelector('.cf-name').textContent = view.name || '';
+    fallback.querySelector('.cf-type').textContent = TYPE_NAME[view.type] || (view.type || '');
+    el.appendChild(fallback);
+
     // 实时攻防数值（覆盖卡图印刷值；位置对齐卡图：攻 27% / 防 73%）
     const atkStat = document.createElement('div');
     atkStat.className = 'stat atk hidden';

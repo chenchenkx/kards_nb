@@ -402,7 +402,22 @@ html, body {
 }
 .card .card-fallback { display: none; }
 .card.no-img .card-img { display: none; }
-.card.no-img .card-fallback { display: flex; }
+/* 无卡图卡的占位卡面（名称 + 兵种，暖木底 + 黄铜字） */
+.card.no-img .card-fallback {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; padding: 8px 6px; text-align: center;
+  background:
+    radial-gradient(ellipse at 50% 30%, rgba(90,74,44,.55), transparent 70%),
+    linear-gradient(165deg, #33291a, #15110a 75%);
+  border: 1px solid #5a4a2c; border-radius: 5px;
+  box-shadow: inset 0 0 18px rgba(0,0,0,.65), inset 0 0 0 2px rgba(232,201,106,.12);
+}
+.card.no-img .card-fallback .cf-name {
+  font-size: 10px; font-weight: 800; letter-spacing: .06em; line-height: 1.25;
+  color: #e8dcb8; text-shadow: 0 1px 2px #000;
+  max-height: 3.8em; overflow: hidden;
+}
+.card.no-img .card-fallback .cf-type { font-size: 9px; color: #b9a97e; letter-spacing: .22em; }
 
 /* 手牌/单位通用状态 */
 .card.playable { cursor: grab; }
