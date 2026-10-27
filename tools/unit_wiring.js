@@ -22,6 +22,14 @@ const FILL = db.deckPool.filter(c => c.type === 'infantry' && !c.text && (c.cost
 function mkGame(opts = {}) {
   const d = FILL.slice(0, 6).map(c => c.id);
   const deck = []; for (let i = 0; i < 39; i++) deck.push(d[i % d.length]);
+  // 混入其它国籍单位与指令（供"检索某国单位/指令"类效果命中）
+  if (opts.deckMix) {
+    const extra = db.cards.filter(c => c.type === 'order' && (c.cost || 0) <= 3).slice(0, 3)
+      .concat(db.cards.filter(c => c.nation === 'Japan' && c.type === 'infantry' && (c.cost || 0) <= 1).slice(0, 2))
+      .concat(db.cards.filter(c => c.nation === 'Soviet' && (c.cost || 0) <= 1).slice(0, 2))
+      .concat(db.cards.filter(c => c.type === 'fighter' && (c.cost || 0) <= 3).slice(0, 2));
+    for (const e of extra) deck.splice(Math.floor(deck.length * 0.5), 0, e.id);
+  }
   const g = new Engine.Game({ db, seed: 41, decks: [deck, deck.slice()], hqs: [db.hqs.Germany, db.hqs.Soviet] });
   g.players[0].kredits = 30; g.players[0].slots = 12;
   g.players[1].kredits = 30; g.players[1].slots = 12;
@@ -92,6 +100,9 @@ function snap(g) {
     handNames: g.players[0].hand.map(c => c.name).sort().join(','),
     disc: g.players[0].discard.length, disc1: g.players[1].discard.length,
     front: g.frontlineOwner + '/' + g.frontline.length,
+    flags: [g.players[0]._hqHealBonus || 0, g.players[0]._hqDmgReduce || 0, g.players[0]._deployTwice ? 1 : 0,
+      g.players[0]._enemyDeployOpCost || 0, g.players[0]._notFromDeckDiscount || 0,
+      g.players[1]._deployGate || 0].join(','),
   };
 }
 
@@ -100,7 +111,7 @@ function delta(a, b) {
   for (const k of new Set([...Object.keys(a.units), ...Object.keys(b.units)])) {
     if (a.units[k] !== b.units[k]) out.push(`u:${k}:${a.units[k]}->${b.units[k]}`);
   }
-  for (const f of ['hq', 'k', 'hand', 'deck', 'deck1', 'disc', 'disc1', 'front', 'handCost', 'handNames']) {
+  for (const f of ['hq', 'k', 'hand', 'deck', 'deck1', 'disc', 'disc1', 'front', 'handCost', 'handNames', 'flags']) {
     if (a[f] !== b[f]) out.push(`${f}:${a[f]}->${b[f]}`);
   }
   return out.sort();
@@ -110,7 +121,7 @@ function delta(a, b) {
 function runPair(def, cl, cfg) {
   const runOne = (d) => {
     const env = cfg.env || {};
-    const { g, foe, foeAir, foeFront } = mkGame({ air: cfg.target === 'air' || env.air, front: cfg.front, allyTank: env.allyTank, manyAllies: env.manyAllies, foeBlitz: env.foeBlitz, hqLow: env.hqLow, hqHigh: env.hqHigh });
+    const { g, foe, foeAir, foeFront } = mkGame({ deckMix: true, air: cfg.target === 'air' || env.air, front: cfg.front, allyTank: env.allyTank, manyAllies: env.manyAllies, foeBlitz: env.foeBlitz, hqLow: env.hqLow, hqHigh: env.hqHigh });
     const s = new Engine.CardInst(d, 0, g);
     let before;
     try {

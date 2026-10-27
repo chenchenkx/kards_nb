@@ -144,7 +144,7 @@
     // "Choose a unit in hand. Swap it..." / "Choose and discard a unit. Give its..." 这类
     // 被句号切断的选择句，先合回一句再解析（否则只会命中前半句）
     text = String(text || '').replace(
-      /(\bchoose[^.]*?)\.\s+(?=(?:give|swap|reduce|draw|gain|copy|convert|trigger|remove)\b)/gi,
+      /(\bchoose[^.]*?)\.\s+(?=(?:give|swap|reduce|draw|gain|copy|convert|trigger|remove|put|spend|get)\b)/gi,
       '$1, ');
     const clauses = [];
     let prevCond = null;      // 上一句已识别的条件，供 "if not." 反指
@@ -268,6 +268,7 @@
     if (m) return { c: 'hasType', side: 'own', type: m[1].toLowerCase().replace(/s$/, ''), neg };
     // v44：数量比较 / 总部比较 / 本回合阵亡 / 本回合只部署一张
     if (/you control more units than (?:the enemy|your opponent)/i.test(t)) return { c: 'unitCompare', op: 'more', neg };
+    if (/you have equal or less units|equal or fewer units/i.test(t)) return { c: 'unitCompare', op: 'atMost', neg };
     if (/you control (?:fewer|less) units than (?:the enemy|your opponent)/i.test(t)) return { c: 'unitCompare', op: 'fewer', neg };
     m = /your hq has (\d+) or more (?:more )?defense than the enemy hq/i.exec(t);
     if (m) return { c: 'hqCompare', op: 'moreBy', n: +m[1], neg };
@@ -517,9 +518,17 @@
       }
     }
     if (/\bif\b/i.test(t0)) {
-      const parts = t0.split(/\bif\b/i);
-      const c = parseCondTail(parts.slice(1).join(' if '));
-      if (c) { cond = c; t0 = parts[0].trim(); }
+      // "If <条件>, <效果>"（条件在前）—— 直接切出效果部分
+      const lead = /^if\s+(.+?),\s*(.+)$/i.exec(t0);
+      if (lead) {
+        const c0 = parseCondTail(lead[1]);
+        if (c0) { cond = c0; t0 = lead[2].trim(); }
+      }
+      if (cond === null) {
+        const parts = t0.split(/\bif\b/i);
+        const c = parseCondTail(parts.slice(1).join(' if '));
+        if (c) { cond = c; t0 = parts[0].trim(); }
+      }
     }
     let ops;
     if (cond === null && /\bwhen\b/i.test(t0) && TRIGGER_EVENT_RE.test(t0)) {
@@ -562,6 +571,10 @@
     if (/kredits spent/.test(t)) return { key: 'kreditsSpent' };
     if (/cards? in your hand/.test(t)) return { key: 'ownHandSize' };
     if (/number of (?:your |friendly )?units|friendly units you (?:control|have)/.test(t)) return { key: 'ownUnitCount' };
+    {
+      const nn = /non-([a-z]+) units you control/.exec(t);
+      if (nn) return { key: 'nonNationUnits', nation: NAT_MAP[nn[1]] || nn[1] };
+    }
     if (/damage (?:taken|dealt) to your hq/.test(t)) return { key: 'hqDamageThisTurn' };
     const n = /(\d+)/.exec(t);
     return { n: n ? +n[1] : 0 };
@@ -716,7 +729,16 @@
     if (/deal damage equal to (?:its|this unit's) attack to the enemy hq/i.test(t)) return [{ op: 'damage', n: 0, calc: 'atk', target: 'enemyHQ' }];
     // ---- 从牌库抽指定名字的卡（24th CAVALRY / 32nd INFANTRY）----
     m = /draw an? ([A-Z0-9][A-Z0-9 .'\-]+?) from your deck/i.exec(origT);
-    if (m) return [{ op: 'addHand', name: m[1].trim(), fromDeck: true }];
+    if (m) {
+      const nm = m[1].trim();
+      // "Draw a random air unit from your deck." → 按类型检索，而不是按名字
+      if (/^random\b/i.test(nm)) {
+        const k = /(air unit|unit|order|infantry|tank|artillery|fighter|bomber)/i.exec(nm);
+        const type = k ? (k[1].toLowerCase() === 'air unit' ? 'air' : k[1].toLowerCase()) : null;
+        return [{ op: 'tutor', to: 'hand', type, random: true, n: 1 }];
+      }
+      return [{ op: 'addHand', name: nm, fromDeck: true }];
+    }
     // ---- 抽多兵种（GATHERING STORM）----
     m = /draw an? random ([a-z, ]+?) from your deck/i.exec(t);
     if (m && /,|\band\b/.test(m[1])) {
@@ -875,6 +897,63 @@
       ops.push({ op: 'addHand', name: m[2].trim(), random: true, count: n });
       return ops;
     }
+
+    // "When a friendly Destruction effect triggers, it triggers twice."（114th INFANTRY）
+    if (/when a friendly destruction effect triggers, it triggers twice/i.test(t)) { ops.push({ op: 'destructionTwiceAura' }); return ops; }
+    // "Trigger the destruction effects of all friendly units destroyed since the start of your last turn."（73rd）
+    if (/trigger the destruction effects of all friendly units destroyed/i.test(t)) { ops.push({ op: 'triggerRecentDestruction' }); return ops; }
+    // "Once per turn, when you shuffle, distribute damage randomly to enemies equal to units in play."（SABAE）
+    if (/when you shuffle,?\s*distribute damage randomly to enemies equal to units in play/i.test(t)) {
+      ops.push({ op: 'shuffleSplash', once: true }); return ops;
+    }
+    // "After you operate a unit, gain kredits equal to the kredits spent to operate it."（182. LANDWEHR）
+    if (/after you operate a unit, gain kredits equal to the kredits spent/i.test(t)) { ops.push({ op: 'gainKreditsFromOp' }); return ops; }
+    // "If this is the first unit you deploy this turn, add a 18e RÉGIMENT to hand."（5e CUIRASSIERS）
+    m = /if this is the first unit you deploy this turn, add (?:a |an )?([A-Z0-9][A-Za-z0-9'\-\. ]*?) to (?:your )?hand/i.exec(t);
+    if (m) { ops.push({ op: 'addHand', name: m[1].trim(), cond: { c: 'deployedOnlyThisTurn' } }); return ops; }
+    // "Fully repair your infantry when you play a Rain card."（162nd REGIMENT）
+    if (/fully repair your infantry when you play a rain card/i.test(t)) { ops.push({ op: 'repairOnRain' }); return ops; }
+
+    // ================= 敌方部署惩罚 / 条件关键词（v44 第六批） =================
+    m = /units deployed by the enemy have \+(\d+) operation cost/i.exec(t);
+    if (m) { ops.push({ op: 'enemyDeployOpCost', n: +m[1] }); return ops; }
+    m = /^has (ambush|blitz|fury|guard|smokescreen|shock)((?:, | and )(?:ambush|blitz|fury|guard|smokescreen|shock))* if you have no cards in hand\.?$/i.exec(t);
+    if (m) {
+      const kws = (t.match(/ambush|blitz|fury|guard|smokescreen|shock/gi) || []).map(k => k.toLowerCase());
+      for (const kw of kws) ops.push({ op: 'situational', kw, cond: { c: 'handEmpty' } });
+      return ops;
+    }
+    // "While in frontline, enemy air units enter the battlefield pinned."（WIRBELWIND）
+    if (/while in frontline, enemy air units enter the battlefield pinned/i.test(t)) { ops.push({ op: 'airPinOnEnter' }); return ops; }
+    // "Combat damage dealt to your infantry is reduced to 2."（162nd REGIMENT）
+    m = /combat damage dealt to your (infantry|tanks?|units) is reduced to (\d+)/i.exec(t);
+    if (m) { ops.push({ op: 'teamDmgCap', type: m[1].toLowerCase().replace(/s$/, ''), n: +m[2] }); return ops; }
+    // "Destruction: A random friendly unit gets attack and defense equal to the attack of this unit."（1st FLORIDA）
+    if (/a random friendly unit gets attack and defense equal to the attack of this unit/i.test(t)) { ops.push({ op: 'buffFromSelfAttack' }); return ops; }
+    // "Destruction: If it is the enemy turn, add a copy of this unit to your hand."（442nd）
+    if (/add a copy of this unit to your hand/i.test(t)) { ops.push({ op: 'addSelfCopyToHand' }); return ops; }
+    // "Destroyed at the end of the second turn on the battlefield."（T-70）
+    m = /destroyed at the end of the second turn on the battlefield/i.exec(t);
+    if (m) { ops.push({ op: 'destroyAfterTurns', n: 2 }); return ops; }
+
+    // ================= 手牌操作 / 关键词复制（v44 第五批） =================
+    // "Choose a unit in hand with a cost of 3 or less. Put it into play."（ILYUSHIN IL-2）
+    m = /choose a unit in hand with a cost of (\d+) or less[,.]?\s*put it into play/i.exec(t);
+    if (m) { ops.push({ op: 'putHandToPlay', maxCost: +m[1] }); return ops; }
+    // "Choose a card in hand. Put it on top of your deck."（175th INFANTRY REGIMENT）
+    if (/^choose a card in hand[,.]?\s*put it on top of your deck/i.test(t)) { ops.push({ op: 'putHandOnDeck' }); return ops; }
+    // "Choose a card in hand. Convert the top card of your deck into it."（THE AMERICAN GUARD）
+    if (/^choose a card in hand[,.]?\s*convert the top card of your deck into it/i.test(t)) { ops.push({ op: 'convertTopDeck' }); return ops; }
+    // "Get the combat keywords of a target unit."（2nd INFANTRY REGIMENT）
+    if (/^get the combat keywords of a target unit/i.test(t)) { ops.push({ op: 'copyTargetKeywords' }); return ops; }
+    // "Spend your remaining kredits. This unit gets +X+X where X is kredits spent."（12th INFANTRY）
+    if (/^spend your remaining kredits/i.test(t)) { ops.push({ op: 'spendKreditsBuff' }); return ops; }
+    // "Add a PANZER 35(t) and a COMBINED ARMS to your hand."（20. PANZERGRENADIER）
+    m = /add (?:a |an )?([A-Z][A-Za-z0-9'\-\.,() ]*?) and (?:a |an )?([A-Z][A-Za-z0-9'\-\.,() ]*?) to your hand/i.exec(t);
+    if (m) { ops.push({ op: 'addHand', name: m[1].trim() }); ops.push({ op: 'addHand', name: m[2].trim() }); return ops; }
+    // "Give all friendly ground units in the frontline +1 defense."（4. PIONEER BATTALION）
+    m = /give all friendly ground units in the frontline \+(\d+) defense/i.exec(t);
+    if (m) { ops.push({ op: 'buff', a: 0, d: +m[1], target: 'allFriendlyUnits', filters: { ground: true, frontline: true } }); return ops; }
 
     // ================= 钳形附加效果（v44 第四批） =================
     if (/damage dealt to this unit is dealt to its pincer partner instead/i.test(t)) { ops.push({ op: 'pincerRedirect' }); return ops; }
@@ -1847,7 +1926,9 @@
     { re: /you draw a card\b/i, ev: 'ownDraw' },
     { re: /you shuffle|when you shuffle/i, ev: 'shuffleDeck' },
     { re: /you operate a unit\b/i, ev: 'ownOperate' },
-    { re: /you deploy an? alpine unit\b/i, ev: 'ownDeploy', cond: { c: 'eventKw', kw: 'alpine' } },
+    { re: /you (?:add or )?deploy an? alpine unit\b/i, ev: 'ownDeploy', cond: { c: 'eventKw', kw: 'alpine' } },
+    { re: /you (?:add or )?deploy (?:or add )?another exile unit\b/i, ev: 'ownDeploy', cond: { c: 'eventKw', kw: 'exile' } },
+    { re: /you (?:deploy or add|add or deploy) a (.+?) tank\b/i, ev: 'ownDeploy', cond: m => ({ c: 'eventName', name: m[1].trim() }) },
     { re: /the enemy hq gains? (?:defense|defence)\b/i, ev: 'enemyHqHealed' },
     { re: /(?:the )?enemy hq takes damage\b/i, ev: 'enemyHqDamaged' },
     { re: /the enemy deploys?\b/i, ev: 'enemyDeploy' },
@@ -2057,7 +2138,7 @@
       case 'unitCompare': {
         const sideC = card ? card.owner : game.current;
         const a = game.unitsOf(sideC).length, b = game.unitsOf(1 - sideC).length;
-        return cond.op === 'more' ? a > b : a < b;
+        return cond.op === 'more' ? a > b : cond.op === 'atMost' ? a <= b : a < b;
       }
       case 'hqCompare': {
         const sideH = card ? card.owner : game.current;
@@ -2090,6 +2171,7 @@
         return t === cond.type;
       }
       case 'eventKw': return !!(ctx && ctx.card && ctx.card.has && ctx.card.has(cond.kw));
+      case 'eventName': return !!(ctx && ctx.card && new RegExp(cond.name, 'i').test(ctx.card.name));
       case 'eventAttackLeast': return !!(ctx && (ctx.attack || 0) >= (cond.n || 0));
       case 'eventOpCostLeast': return !!(ctx && ctx.card && ((ctx.card.opCost || 0)) >= (cond.n || 0));
       case 'eventHeavyArmor': return !!(ctx && ctx.card && (ctx.card.heavyArmor || 0) > 0);
@@ -2384,6 +2466,10 @@
       const cur = this.current;
       // "At the end of your turn…" 触发（先结算再切换行动方）
       this.fireTrigger('endOfTurn', { side: cur }, u => u.owner === cur);
+      // "Destroyed at the end of the second turn on the battlefield."（T-70）
+      for (const u of [...this.unitsOf(cur)]) {
+        if (u._destroyAtTurn && this.turn >= u._destroyAtTurn) { this.log(`${u.name} 到期自毁`); this.destroyCard(u, null); }
+      }
       this.expireTempBuffs(cur);
       this.current = 1 - cur;
       if (cur === 1) this.turn++;
@@ -2582,7 +2668,7 @@
       const wasFront = c.loc === 'front';
       // destruction trigger effects
       const clauses = c._parsed || (c._parsed = parseClauses(c.text));
-      const destTimes = c._destructionTwice ? 2 : 1;
+      const destTimes = (c._destructionTwice || this.players[c.owner]._destructionTwiceAura) ? 2 : 1;
       for (let di = 0; di < destTimes; di++) {
         for (const cl of clauses) {
           if (cl.kind !== 'destruction') continue;
@@ -2747,6 +2833,15 @@
         this.sortBoard(p.board);
         this.log(`${c.name} 部署至支援阵线`);
         if (c.has && c.has('exile')) p._exilePlayedTurn = this.turn;
+        // "Units deployed by the enemy have +2 operation cost."（P-40 N-5）
+        const opTax = this.players[1 - side]._enemyDeployOpCost || 0;
+        if (opTax) { c._opCostMod = (c._opCostMod || 0) + opTax; this.log(`${c.name} 行动费 +${opTax}（敌方光环）`); }
+        // "While in frontline, enemy air units enter the battlefield pinned."（WIRBELWIND）
+        if ((c.type === 'fighter' || c.type === 'bomber')
+          && this.unitsOf(1 - side).some(u => u._airPinOnEnter && u.loc === 'front')) {
+          c._pinned = true;
+          this.log(`${c.name} 部署即被压制（WIRBELWIND）`);
+        }
         // 本回合部署计数（"if this was the only unit you deployed"）
         if (p._deployCountTurn !== this.turn) { p._deployCountTurn = this.turn; p._deployCount = 0; }
         p._deployCount = (p._deployCount || 0) + 1;
@@ -2963,7 +3058,10 @@
       const earlyDef = targetUid === 0 ? null : this.find(targetUid);
       const tax = earlyDef && earlyDef._enemyTax ? earlyDef._enemyTax : 0;
       if (p.kredits < atk.effOpCost + tax) return { ok: false, error: '指挥点不足' };
-      p.kredits -= (atk.effOpCost + tax);
+      const opSpent = atk.effOpCost + tax;
+      p.kredits -= opSpent;
+      this.fireTrigger('ownOperate', { side, amount: opSpent }, u => u.owner === side);
+      if (p._gainKreditsFromOpTotal) { /* reserved */ }
       p.kreditsSpent = (p.kreditsSpent || 0) + atk.effOpCost + tax;
       atk.hasAttacked = true;
       atk.attacksLeft -= 1;
@@ -3038,6 +3136,8 @@
           if (okSrc) x = Math.max(0, x - mt.minus);
         }
         // 受击方：翻倍 / 上限 / 每相邻单位减免（v44）
+        const capAura = (this.players[d.owner] || {})._teamDmgCap;
+        if (capAura && (!capAura.type || d.type === capAura.type) && x > capAura.n) x = capAura.n;
         if (d._dmgTakenMult) x *= d._dmgTakenMult;
         if (d._dmgTakenTo != null) x = Math.min(x, d._dmgTakenTo);
         if (d._dmgTakenPerAdj) x = Math.max(0, x - d._dmgTakenPerAdj * this.adjacentUnits(d).length);
@@ -3187,7 +3287,18 @@
      * 中央触发器派发：扫描双方场上单位的 trigger 子句（kind:'trigger'），
      * 命中事件与条件则执行其 ops。filter 用于限定作用单位（如"只有击杀者自己"）。
      */
+    /** operate 事件里的"回收指挥点"（182. LANDWEHR） */
+    handleOperateGain(ctx) {
+      for (const u of this.unitsOf(ctx.side)) {
+        if (!u._gainKreditsFromOp) continue;
+        const p = this.players[ctx.side];
+        p.kredits = Math.min(RULES.MAX_SLOTS, p.kredits + (ctx.amount || 0));
+        this.log(`${u.name} 返还 ${ctx.amount} 指挥点`);
+      }
+    }
+
     fireTrigger(event, ctx, filter) {
+      if (event === 'ownOperate' && ctx && ctx.amount) this.handleOperateGain(ctx);
       for (const u of [...this.unitsOf(0), ...this.unitsOf(1)]) {
         if (filter && !filter(u)) continue;
         // 被授予的触发型能力（"你的单位获得：攻击敌 HQ 后抽一张"）
@@ -3738,8 +3849,14 @@
           break;
         }
         case 'hqGainFromDamage': {
-          src._hqGainFromDamage = true;
-          this.log(`${src.name}：受伤时总部回复等量防御`);
+          if (ctx && ctx.amount) {
+            const pl = this.players[me];
+            const add = Math.min(ctx.amount, Math.max(0, pl.hqMaxDef - pl.hqDef));
+            if (add > 0) { pl.hqDef += add; this.log(`总部回复 ${add} 点防御`); }
+          } else {
+            src._hqGainFromDamage = true;
+            this.log(`${src.name}：受伤时总部回复等量防御`);
+          }
           break;
         }
         case 'redirectToSelf': {
@@ -3820,7 +3937,9 @@
           // "Move N random Navy cards in your deck to the top"（ATLANTIC COMMAND）
           const p = this.players[me];
           const tag = (op.tag || '').toLowerCase();
-          const cands = p.deck.filter(c => !tag || tag === 'card' || (tag === 'navy' && /navy/i.test((c.text || '') + (c.keywords || []).join(' '))) || c.type === tag);
+          const cands = p.deck.filter(c => !tag || tag === 'card'
+            || (tag === 'navy' && /navy/i.test((c.text || '') + ' ' + (Array.isArray(c.keywords) ? c.keywords.join(' ') : [...(c.keywords || [])].join(' '))))
+            || c.type === tag);
           const list = cands.length ? cands : p.deck;
           for (let i = 0; i < (op.n || 1) && list.length; i++) {
             const pick = list.splice(Math.floor(this.rng.next() * list.length), 1)[0];
@@ -4143,6 +4262,7 @@
               case 'ownUnitCount': return this.unitsOf(me).length;
               case 'kredits': return this.players[me].kredits || 0;
               case 'slotsLost': return Math.max(0, (RULES.MAX_KREDITS || 12) - this.players[me].slots);
+              case 'nonNationUnits': return this.unitsOf(me).filter(u => u.nation !== op.nation).length;
               case 'ownHandSize': return this.players[me].hand.length;
               case 'highestOwnAttack': return this.unitsOf(me).reduce((a, u) => Math.max(a, u.totalAttack), 0);
               case 'atk': return src.totalAttack || 0;
@@ -4690,6 +4810,18 @@
           for (let ri = 0; ri < reps; ri++) {
           const c = new CardInst(def, me, this);
           if (op.op === 'addHand') {
+            // "Draw a 32nd INFANTRY REGIMENT from your deck." → 从牌库真实抽取同名卡
+            if (op.fromDeck) {
+              const idx = this.players[me].deck.findIndex(x => x.name.toLowerCase() === def.name.toLowerCase());
+              if (idx >= 0) {
+                const real = this.players[me].deck.splice(idx, 1)[0];
+                real.loc = 'hand'; real._notFromDeck = false;
+                if (this.players[me].hand.length < RULES.MAX_HAND) this.players[me].hand.push(real);
+                else this.players[me].discard.push(real);
+                this.log(`从牌库抽到 ${real.name}`);
+                break;
+              }
+            }
             c.loc = 'hand';
             c._notFromDeck = true;
             if (this.players[me].hand.length < RULES.MAX_HAND) this.players[me].hand.push(c);
@@ -4906,6 +5038,119 @@
           this.draw(0, 1, true);
           this.draw(1, 1, true);
           this.log('双方各抽一张牌');
+          break;
+        }
+        case 'destructionTwiceAura': {
+          this.players[me]._destructionTwiceAura = true;
+          this.log('我方亡计效果触发两次');
+          break;
+        }
+        case 'triggerRecentDestruction': {
+          const list = (this._destroyedThisTurn || []).filter(x => x.owner === me);
+          for (const x of list) {
+            const inst = new CardInst(x.def, me, this);
+            inst._parsed = parseClauses(inst.text);
+            for (const cl of inst._parsed) if (cl.kind === 'destruction') this.execOps(cl.ops, inst, {});
+          }
+          this.log(`触发本回合阵亡的 ${list.length} 个我方单位的亡计`);
+          break;
+        }
+        case 'shuffleSplash': {
+          src._shuffleSplash = { once: true, turn: -1 };
+          this.log('洗牌时对敌方随机分配伤害');
+          break;
+        }
+        case 'gainKreditsFromOp': {
+          src._gainKreditsFromOp = true;
+          break;
+        }
+        case 'repairOnRain': {
+          src._repairOnRain = true;
+          break;
+        }
+        case 'enemyDeployOpCost': {
+          this.players[me]._enemyDeployOpCost = op.n || 2;
+          this.log(`敌方部署单位行动费 +${op.n || 2}`);
+          break;
+        }
+        case 'airPinOnEnter': {
+          src._airPinOnEnter = true;
+          this.log(`${src.name}：在前线时敌方空军部署即被压制`);
+          break;
+        }
+        case 'teamDmgCap': {
+          this.players[me]._teamDmgCap = { type: op.type, n: op.n };
+          break;
+        }
+        case 'buffFromSelfAttack': {
+          const list = this.unitsOf(me).filter(u => u.uid !== src.uid);
+          const t = list.length ? this.rng.pick(list) : null;
+          if (t && src.totalAttack) {
+            t.buffAttack += src.totalAttack - t.totalAttack;
+            t.buffDefense += src.totalAttack - t.totalDefense;
+            this.log(`${t.name} 攻防变为 ${src.totalAttack}`);
+          }
+          break;
+        }
+        case 'addSelfCopyToHand': {
+          const cp = new CardInst(src.def, me, this);
+          cp.loc = 'hand'; cp._notFromDeck = true;
+          this.players[me].hand.push(cp);
+          this.log(`复制 ${src.name} 到手牌`);
+          break;
+        }
+        case 'destroyAfterTurns': {
+          src._destroyAtTurn = this.turn + (op.n || 2);
+          this.log(`${src.name} 将在第 ${src._destroyAtTurn} 回合结束时被摧毁`);
+          break;
+        }
+        case 'putHandToPlay': {
+          const pl = this.players[me];
+          const cand = pl.hand.filter(x => x.isUnit && (x.cost || 0) <= (op.maxCost || 99));
+          const pick = cand.length ? this.rng.pick(cand) : null;
+          if (!pick) { this.log('手牌中没有符合条件的单位'); break; }
+          pl.hand.splice(pl.hand.indexOf(pick), 1);
+          pick.loc = 'board'; pick.summonedTurn = this.turn; pick.hasAttacked = !pick.has('blitz');
+          pl.board.push(pick);
+          this.log(`${pick.name} 从手牌直接进入战场`);
+          break;
+        }
+        case 'putHandOnDeck': {
+          const pl = this.players[me];
+          if (!pl.hand.length) break;
+          const pick = this.rng.pick(pl.hand);
+          pl.hand.splice(pl.hand.indexOf(pick), 1);
+          pick.loc = 'deck'; pl.deck.unshift(pick);
+          this.log(`${pick.name} 被放到牌库顶`);
+          break;
+        }
+        case 'convertTopDeck': {
+          const pl = this.players[me];
+          const pick = pl.hand[0];
+          if (!pick || !pl.deck.length) break;
+          const top = pl.deck.shift();
+          const nc = new CardInst(pick.def, me, this);
+          nc.loc = 'deck';
+          pl.deck.unshift(nc);
+          this.log(`牌库顶的 ${top.name} 变为 ${nc.name}`);
+          break;
+        }
+        case 'copyTargetKeywords': {
+          const t = pickUnit('enemyUnit') || pickUnit('unit');
+          if (!t) break;
+          const combat = ['blitz', 'guard', 'fury', 'smokescreen', 'ambush', 'shock'];
+          for (const k of combat) if (t.has(k)) src.keywords.add(k);
+          this.log(`${src.name} 复制了 ${t.name} 的战斗关键词`);
+          break;
+        }
+        case 'spendKreditsBuff': {
+          const pl = this.players[me];
+          const n = pl.kredits || 0;
+          if (n > 0) {
+            src.buffAttack += n; src.buffDefense += n;
+            pl.kredits = 0; pl.kreditsSpent = (pl.kreditsSpent || 0) + n;
+            this.log(`花掉 ${n} 指挥点，${src.name} +${n}/+${n}`);
+          }
           break;
         }
         case 'grantSelfDestruction': {
@@ -5396,6 +5641,10 @@
           const names = { sun: '晴天', storm: '风暴', rain: '降雨' };
           this.players[me]._weatherPlayedTurn = this.turn;
           this.players[me]._weatherKind = op.kind;
+          if (op.kind === 'rain' && this.unitsOf(me).some(u => u._repairOnRain)) {
+            for (const u of this.unitsOf(me)) if (u.type === 'infantry' && u.defense < u.totalDefense) u.defense = u.totalDefense;
+            this.log('降雨：我方步兵全部修复（162nd REGIMENT）');
+          }
           this.log(`天气：${names[op.kind] || '变化'}`);
           break;
         }
