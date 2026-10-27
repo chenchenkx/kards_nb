@@ -318,9 +318,24 @@
   function parseOps(s) {
     let t0 = String(s || '').replace(/[\u2019\u2018]/g, "'").trim();
 
-    // 引号授予型（"Your units get: \"...\"") —— 引号内是**持续给其他卡的能力**，
-    // 不能当成本卡的即时效果结算（否则会在打出时立刻摧毁/增益，语义完全错）。
-    // 这类卡目前按"无即时效果"处理（能力授予系统未实现）。
+    // 引号授予型：优先识别 **亡计授予**（"Your units get: "Destruction: Draw a card.""），
+    // 这是可实现的能力授予；其余引号能力（持续光环/触发链）暂不结算。
+    {
+      const qm = /"([^"]+)"/.exec(t0);
+      const gd = qm && /^destruction:\s*(.+)$/i.exec(qm[1].trim());
+      if (gd) {
+        const sub = parseOps(gd[1]);
+        if (sub.length) {
+          const allUnits = /\byour units|your (?:[a-z]+ )?units|each of your|all your|units everywhere/i.test(t0);
+          const nat = /(german|soviet|american|british|japanese|french|italian|polish|finnish)/i.exec(t0);
+          return [{
+            op: 'grant', scope: allUnits ? 'allFriendly' : 'target', kind: 'destruction', ops: sub,
+            nation: nat ? (NAT_MAP[nat[1].toLowerCase()] || null) : null,
+          }];
+        }
+      }
+    }
+    // 其他引号授予：能力授予系统未实现，按"无即时效果"处理（避免打出时立刻误结算）
     if (/^[^:]{0,60}\bgets?:\s*"/i.test(t0)) return [];
 
     // ---- 二选一必须最先处理 ----
@@ -2050,6 +2065,10 @@
         if (cl.kind !== 'destruction') continue;
         this.execOps(cl.ops, c, { killer });
       }
+      // 被授予的亡计能力（"Your units get: "Destruction: ...""）
+      for (const g of (c._granted || [])) {
+        if (g.kind === 'destruction') this.execOps(g.ops, c, { killer, granted: true });
+      }
       // 击杀触发（HUDSON Mk III：击杀单位 → 获得狂怒直到回合结束）
       if (killer && killer.isUnit && killer.loc !== 'discard') {
         this.fireTrigger('selfKill', { killerUid: killer.uid, destroyedUid: c.uid }, u => u.uid === killer.uid);
@@ -2911,6 +2930,15 @@
         case 'handTaxAll': {
           this.players[foe]._handTaxAll = (this.players[foe]._handTaxAll || 0) + op.n;
           this.log(`敌方手牌费用 +${op.n}`);
+          break;
+        }
+        case 'grant': {
+          // "Your units get: "Destruction: ..."" / "Give a friendly unit: "...""
+          const list = op.scope === 'allFriendly'
+            ? this.unitsOf(me).filter(u => !op.nation || u.nation === op.nation)
+            : [pickUnit('friendlyUnit')].filter(Boolean);
+          for (const u of list) (u._granted = u._granted || []).push({ kind: op.kind, ops: op.ops });
+          this.log(`授予 ${list.length} 个单位能力（${op.kind}）`);
           break;
         }
         case 'distributeDamage': {

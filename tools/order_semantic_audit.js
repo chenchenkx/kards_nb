@@ -11,6 +11,7 @@ function allOps(ops, acc) {
   for (const o of ops || []) {
     acc.push(o);
     if (o.op === 'choose') for (const opt of o.options || []) allOps(opt.ops, acc);
+    if (o.op === 'grant' && o.ops) allOps(o.ops, acc);   // 授予的能力也算已实现
   }
   return acc;
 }
