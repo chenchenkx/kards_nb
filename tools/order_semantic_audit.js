@@ -47,7 +47,7 @@ for (const c of ORDERS) {
     const v = m[1].toLowerCase();
     return v === 'a' || v === 'an' ? 1 : (v === 'two' ? 2 : v === 'three' ? 3 : v === 'four' ? 4 : +v);
   });
-  const drawOps = ops.filter(o => o.op === 'draw');
+  const drawOps = ops.filter(o => o.op === 'draw' || o.op === 'drawPer');
   if (drawNums.length && !drawOps.length) add('文本有抽牌但未解析', id, `${c.name}: ${text.slice(0, 80)}`);
   else if (drawNums.length && drawOps.length) {
     const opNums = drawOps.map(o => o.n || 1);
@@ -72,7 +72,8 @@ for (const c of ORDERS) {
   }
 
   // 6) 关键词授予
-  const giveKw = [...text.matchAll(/\b(?:give|gives|grant|gains?|gets?)\b[^.]*?\b(blitz|guard|fury|smokescreen|ambush|shock|mobilize|alpine|pincer|covert)\b/gi)];
+  const giveKw = [...text.matchAll(/\b(?:give|gives|grant|gains?|gets?)\b[^.]*?\b(blitz|guard|fury|smokescreen|ambush|shock|mobilize|alpine|pincer|covert)\b/gi)]
+    .filter(m => !/\bwith (guard|covert|alpine|smokescreen|ambush)\b/i.test(m[0]) && !/your alpine units|alpine unit\b/i.test(m[0]));
   if (giveKw.length && !opNames.has('keyword') && !opNames.has('teamAura') && !opNames.has('condKw')) {
     add('文本有关键词授予但未解析', id, `${c.name}: ${text.slice(0, 80)}`);
   }
