@@ -501,6 +501,30 @@
   function parseOpsRaw(s, orig) {
     const ops = [];
     const t = String(s || '').replace(/[\u2019\u2018]/g, "'").trim();
+    // ---- 部署/费用/牌库顶等"非即时伤害"指令（v42 补） ----
+    // "Copy random order from enemy deck"（NIGHT RAID，缺冠词）
+    if (/^copy (?:a |one )?random orders? (?:from|in) (?:the )?enemy deck/i.test(t)) { ops.push({ op: 'copyEnemyDeck', n: 1, onlyOrders: true }); return ops; }
+    // "Add a SISSI adjacent to a friendly unit."（FROZEN ASSETS）
+    let am2 = /add (?:a |an )?([A-Z][A-Za-z0-9'\-\. ]*?) adjacent to a friendly unit/i.exec(t);
+    if (am2) { ops.push({ op: 'addHand', name: am2[1].trim() }); return ops; }
+    // "Units you deploy this turn deal damage equal to their attack to a random enemy."（HEATWAVE）
+    if (/units you deploy this turn deal damage equal to their attack/i.test(t)) { ops.push({ op: 'deployDealAttack' }); return ops; }
+    // "Both players add the unit with the highest cost in their hand to their support line."（GAMBIT）
+    if (/both players add the unit with the highest cost/i.test(t)) { ops.push({ op: 'gambitAddHighest' }); return ops; }
+    // "Add a copy to owner's hand."（RETRIBUTION 的亡计授予）
+    if (/^add a copy to (?:its )?owner'?s? hand/i.test(t)) { ops.push({ op: 'addHandCopy' }); return ops; }
+    // "Add four KIKKA on top of your deck"（IMPERIAL WEAPON No. 2）
+    let km2 = /add (a |one |two |three |four |\d+ )?([A-Z0-9][A-Za-z0-9'\-\., ]*?) on top of your deck/i.exec(t);
+    if (km2) { ops.push({ op: 'addDeckToTop', name: km2[2].trim(), n: /four|\b3\b/i.test(km2[1] || '') ? 4 : 1 }); return ops; }
+    // "The enemy cannot deploy units next turn"（U-48）
+    if (/enemy cannot deploy units? next turn/i.test(t)) { ops.push({ op: 'deployGate', n: 1, side: 'enemy' }); return ops; }
+    // "Units in your hand cost 0 to deploy this turn"（SPRING THE RESERVES）
+    if (/(?:units?|cards?) in your hand cost 0 to deploy/i.test(t)) { ops.push({ op: 'handCostSet', n: 0 }); return ops; }
+    // "Units you deploy cost 1 less kredit and have Blitz this turn"（PATTON）
+    let pm2 = /units you deploy cost (\d+) less kredits? and have (\w+)/i.exec(t);
+    if (pm2) { ops.push({ op: 'teamAura', kind: 'cost', delta: -(+pm2[1]) }); ops.push({ op: 'teamAura', kind: 'keyword', kw: pm2[2].toLowerCase() }); return ops; }
+    // "Reduce the deploy and operation cost of all units in your hand and deck by 1"（STANDARD AMMO）
+    if (/reduce the deploy and operation cost of all units/i.test(t)) { ops.push({ op: 'handCostAll', n: -1 }); return ops; }
     // ---- 手牌交互（选择手牌 → 弃/降费/复制/换场） ----
     let hx;
     hx = /choose a (us|american|german|soviet|british|japanese|french|italian|polish|finnish) unit in hand[.,]?\s*reduce its cost by its operation cost/i.exec(t);
@@ -1041,10 +1065,12 @@
     }
 
     // "Deploy a X" / "Add a X to [the|your] (support line|frontline|battlefield)"
-    m = /(?:deploy|add) (?:a |an |one |two )?(random )?([A-Z0-9'\-\. ]+?)(?= (?:fighter|bomber|tank|infantry|artillery|unit|card|to|$))/i.exec(t);
-    if (m && m[2] && !/to your hand/.test(t)) {
-      const loc = /support line/.test(t) ? 'support' : /frontline/.test(t) ? 'front' : /your hand/.test(t) ? 'hand' : 'support';
-      ops.push({ op: 'spawn', name: m[2].trim(), random: !!m[1], loc: loc === 'front' ? 'front' : (loc === 'hand' ? 'hand' : 'board') });
+    m = /(?:deploy|add) (?:a |an |one |two )?(random )?([A-Z0-9'\-\. ]+?) (?:to (?:the |your )?(support line|frontline|battlefield|hand))?/i.exec(t);
+    // 只认明确的"放到某处"句式，避免 "cannot deploy units" / "Units you deploy cost ..." 被误吞
+    if (m && m[2] && /\b(?:to|into) (?:the |your )?(?:support line|frontline|battlefield|hand)\b/i.test(t) && !/to your hand/i.test(t)) {
+      const loc = (m[3] || 'support').toLowerCase();
+      const cleanName = m[2].trim().replace(/\s+(?:fighter|bomber|tank|infantry|artillery|unit|card)$/i, '');
+      ops.push({ op: 'spawn', name: cleanName, random: !!m[1], loc: /front/.test(loc) ? 'front' : (/hand/.test(loc) ? 'hand' : 'board') });
       return ops;
     }
 
@@ -1928,6 +1954,7 @@
     beginTurn() {
       const p = this.players[this.current];
       if (p._noSlotTurns > 0) { p._noSlotTurns--; } else p.slots = Math.min(RULES.MAX_KREDITS, p.slots + 1);
+      if (p._noDeployTurns > 0) p._noDeployTurns--;
       if (p._drawOnTurn4 && this.turn >= 3) { p._drawOnTurn4 = false; this.draw(this.current, 1, true); }
       p.kredits = p.slots;
       p.ordersPlayedThisTurn = 0;
@@ -2298,6 +2325,8 @@
         return { ok: true, gotcha: true };
       }
 
+      // "The enemy cannot deploy units next turn"（U-48）
+      if (c.isUnit && p._noDeployTurns > 0) return { ok: false, error: '本回合无法部署单位' };
       if ((c.type === 'order' || c.type === 'gotcha') && p._noOrders) {
         return { ok: false, error: '本回合无法使用指令' };
       }
@@ -2360,6 +2389,13 @@
       p.playedThisTurn = (p.playedThisTurn || 0) + 1;
       if (p.playedThisTurn >= 2) this.execCardText(c, 'pincer', ctx);
       this.applyAuras();
+      // 本回合禁止部署（U-48）
+      if (p._noDeployTurns > 0) { /* 由 canPlay 拦截，这里仅兜底 */ }
+      // 部署即造成伤害（HEATWAVE）
+      if (p._deployDealAttack === this.turn) {
+        const list = this.unitsOf(1 - side).filter(u => u.defense > 0);
+        if (list.length) this.damageCard(this.rng.pick(list), c.totalAttack || 0, c);
+      }
       // 部署光环（COMMITTED CREW / CONTEST DOCTRINE）与"部署抽牌"（FEIGNED RETREAT）
       if (c.isUnit) {
         for (const sideBuf of [p._deployBuff]) {
@@ -3392,6 +3428,56 @@
           boardUnit.loc = 'hand';
           p.hand.push(boardUnit);
           this.log(`${handUnit.name} 上场，${boardUnit.name} 回到手牌`);
+          break;
+        }
+        case 'addDeckToTop': {
+          const def = this.findByName(op.name)[0];
+          if (def) {
+            for (let i = 0; i < (op.n || 1); i++) {
+              const nc = new CardInst(def, me, this);
+              nc.loc = 'deck';
+              this.players[me].deck.unshift(nc);
+            }
+            this.log(`牌库顶放入 ${op.n || 1} 张 ${def.name}`);
+          }
+          break;
+        }
+        case 'deployGate': {
+          const side = op.side === 'enemy' ? foe : me;
+          this.players[side]._noDeployTurns = (this.players[side]._noDeployTurns || 0) + (op.n || 1);
+          this.log(`P${side + 1} 下 ${op.n || 1} 回合无法部署单位`);
+          break;
+        }
+        case 'handCostAll': {
+          for (const c of [...this.players[me].hand, ...this.players[me].deck]) {
+            if (c.isUnit) c._costMod = (c._costMod || 0) + (op.n || 0);
+          }
+          this.log(`手牌与牌库单位费用 ${op.n}`);
+          break;
+        }
+        case 'deployDealAttack': {
+          this.players[me]._deployDealAttack = this.turn;
+          this.log('本回合部署的单位将对随机敌人造成等同攻击的伤害');
+          break;
+        }
+        case 'gambitAddHighest': {
+          for (const side of [0, 1]) {
+            const pl = this.players[side];
+            if (!pl.hand.length) continue;
+            const best = pl.hand.filter(c => c.isUnit).sort((a, b) => (b.cost || 0) - (a.cost || 0))[0];
+            if (!best) continue;
+            pl.hand.splice(pl.hand.indexOf(best), 1);
+            best.loc = 'board'; best.summonedTurn = this.turn;
+            pl.board.push(best);
+          }
+          this.log('双方各把最高费用的手牌单位放入支援线');
+          break;
+        }
+        case 'addHandCopy': {
+          const copy = new CardInst(src.def, me, this);
+          copy.loc = 'hand';
+          this.players[me].hand.push(copy);
+          this.log(`复制 ${src.name} 到手牌`);
           break;
         }
         case 'spawnDef': {
