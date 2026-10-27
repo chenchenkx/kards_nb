@@ -91,6 +91,7 @@
     get effCost() {
       let c = (this.cost || 0) + (this._costMod || 0) + (this._costBase || 0);
       const g = this._game;
+      if (g && g.teamAuraFor) c += g.teamAuraFor(this, 'deploy');
       if (g && g.costCalcOf) c += g.costCalcOf(this);
       return Math.max(0, c);
     }
@@ -369,6 +370,8 @@
     'the enemy draws',
     'end of turn', 'start of turn',
     'this unit attacks',
+    "[A-Z][A-Z0-9 '\-]{2,} attacks?",
+    'you shuffle',
     'this unit (?:is destroyed|dies)',
     // v44 新增事件
     'the enemy hq gains? (?:defense|defence)',
@@ -379,6 +382,12 @@
     'friendly unit destroys? an? (?:enemy )?unit',
     'you deploy (?:or add )?(?:a |another )?unit',
     'deploy an? alpine unit',
+    // v48：被攻击 / 特定单位攻击 / 特定单位部署
+    'enemy attacks? (?:it|this unit)',
+    'enemy targets?',
+    'you attack with an?',
+    'you deploy a (?:tank|infantry|artillery|fighter|bomber) with \\d+ or more attack',
+    'you (?:deploy or add|add or deploy) a .* tank',
   ].join('|'), 'i');
 
   function parseOps(s) {
@@ -898,6 +907,14 @@
       return ops;
     }
 
+    // "All your Soviet tanks in hand and deck cost 1 less to deploy."（175th MOTORIZED）
+    let m2 = /all your (german|soviet|american|british|japanese|french|italian|polish|finnish) (tanks?|infantry|artillery|fighters?|bombers?) in hand and deck cost (\d+) less/i.exec(t);
+    if (m2) { ops.push({ op: 'teamDeckCost', nation: NAT_MAP[m2[1].toLowerCase()] || m2[1], type: m2[2].toLowerCase().replace(/s$/, ''), n: -(+(m2[3])) }); return ops; }
+
+    // "When you attack and destroy an enemy unit, Convert a random card in the enemy hand into PRODUCTION."（JAGDPANZER）
+    let m3 = /convert a random card in the enemy hand into ([A-Z][A-Z0-9'\- ]{2,30})/i.exec(t);
+    if (m3) { ops.push({ op: 'convertEnemyHand', to: m3[1].trim() }); return ops; }
+
     // "When a friendly Destruction effect triggers, it triggers twice."（114th INFANTRY）
     if (/when a friendly destruction effect triggers, it triggers twice/i.test(t)) { ops.push({ op: 'destructionTwiceAura' }); return ops; }
     // "Trigger the destruction effects of all friendly units destroyed since the start of your last turn."（73rd）
@@ -955,6 +972,14 @@
     m = /give all friendly ground units in the frontline \+(\d+) defense/i.exec(t);
     if (m) { ops.push({ op: 'buff', a: 0, d: +m[1], target: 'allFriendlyUnits', filters: { ground: true, frontline: true } }); return ops; }
 
+    // "It fights a random enemy unit."（57th RIFLES）
+    if (/\bit fights? a random enemy unit/i.test(t)) { ops.push({ op: 'fightRandom' }); return ops; }
+    // "It deals 0-1 additional damage."（KATYUSHA）
+    if (/deals? 0-1 additional damage/i.test(t)) { ops.push({ op: 'extraDmg', max: 1 }); return ops; }
+    // "Distribute 3 damage between random enemies."（LONG TOM）
+    m = /distribute (\d+) damage (?:between|among) (?:random )?enemies/i.exec(t);
+    if (m) { ops.push({ op: 'distributeOnAttack', n: +m[1] }); return ops; }
+
     // ================= 钳形附加效果（v44 第四批） =================
     if (/damage dealt to this unit is dealt to its pincer partner instead/i.test(t)) { ops.push({ op: 'pincerRedirect' }); return ops; }
     if (/units dealt combat damage by this unit are destroyed/i.test(t)) { ops.push({ op: 'destroyOnDamage' }); return ops; }
@@ -994,10 +1019,10 @@
 
     // ================= 光环 / 费用 / 抗性（v44 第二批） =================
     // "Your LIGHT INFANTRY units have Alpine."（67th BARANOVICHI）
-    m = /^your ([A-Z][A-Za-z0-9'\- ]{2,30}) units? have (blitz|guard|fury|smokescreen|ambush|shock|alpine|pincer)$/i.exec(t);
+    m = /^your ([A-Z][A-Za-z0-9'\- ]{2,30}) units? have (blitz|guard|fury|smokescreen|ambush|shock|alpine|pincer)\.?$/i.exec(t);
     if (m) { ops.push({ op: 'teamKeyword', kw: m[2].toLowerCase(), name: m[1].trim() }); return ops; }
     // "Also counts as a tank."（SAVOIA CAVALLERIA）
-    m = /^also counts as an? (infantry|tank|artillery|fighter|bomber)$/i.exec(t);
+    m = /^also counts as an? (infantry|tank|artillery|fighter|bomber)\.?$/i.exec(t);
     if (m) { ops.push({ op: 'countsAs', type: m[1].toLowerCase() }); return ops; }
     // "Damage dealt to your HQ is reduced by 1."（593rd JASCO）
     m = /damage dealt to your hq is reduced by (\d+)/i.exec(t);
@@ -1007,7 +1032,7 @@
     // "Your non-targeting deployment effects trigger twice."（B-26 MARAUDER）
     if (/non-targeting deployment effects trigger twice/i.test(t)) { ops.push({ op: 'deployTwice' }); return ops; }
     // "Deployment effects do not trigger."（PETLYAKOV Pe-2FT）
-    if (/^deployment effects do not trigger$/i.test(t)) { ops.push({ op: 'noDeployEffects' }); return ops; }
+    if (/^deployment effects do not trigger\.?$/i.test(t)) { ops.push({ op: 'noDeployEffects' }); return ops; }
     // "Pincer: +1 Heavy Armor."（STUG III G SCHÜRZEN）
     m = /^\+(\d+) heavy armor\.?$/i.exec(t);
     if (m) { ops.push({ op: 'addHeavyArmor', n: +m[1] }); return ops; }
@@ -1322,6 +1347,8 @@
       return ops;
     }
 
+    // "When a HQ gains defense, it takes that much damage instead."（TYPE 89 Chi-Ro）
+    if (/when a hq gains? (?:defense|defence), it takes that much damage instead/i.test(t)) { ops.push({ op: 'hqHealToDamage' }); return ops; }
     // Destruction 小效果（388th / FUKUOKA / KURUME / TAKASAKI）
     if (/^the enemy draws? (?:a|one|\d+) cards?\.?$/i.test(t)) { ops.push({ op: 'enemyDraw', n: /\d+/.test(t) ? +/(\d+)/.exec(t)[1] : 1 }); return ops; }
     if (/^(?:your )?enemy discards? a card\.?$/i.test(t)) { ops.push({ op: 'enemyDiscard', n: 1 }); return ops; }
@@ -1349,7 +1376,7 @@
     }
 
     // "Add X to your hand" (spawn by name)
-    m = /add (?:a |an |one |two |three )?(random )?([A-Z0-9'\-\. ]+?) to your hand/i.exec(t);
+    m = /add (?:a |an |one |two |three )?(random )?([A-Z0-9'\-\. ]+?) to (?:your )?hand\.?/i.exec(t);
     if (m) {
       if (/^copy$/i.test(m[2].trim())) { ops.push({ op: 'copyToHand' }); return ops; }
       // "Add a X and a Y to your hand" → 两张都加入
@@ -1383,6 +1410,12 @@
       const n = sd[1] === 'two' ? 2 : sd[1] === 'three' ? 3 : sd[1] === 'four' ? 4 : +sd[1];
       ops.push({ op: 'addDeck', name: sd[2].trim(), count: n });
       return ops;
+    }
+
+    // "Add your last destroyed ground unit to your support line."（ILYUSHIN IL-10）
+    {
+      const ld = /add your last destroyed (ground |air )?unit to your support line/i.exec(t);
+      if (ld) { ops.push({ op: 'spawnLastDestroyed', air: /air/i.test(ld[1] || '') }); return ops; }
     }
 
     // "Add to your support line two 59. PANZERGRENADIER with Blitz."（倒装：位置在前）
@@ -1659,7 +1692,9 @@
     if (m) { ops.push({ op: 'clone', toDeck: true }); return ops; }
 
     // --- 变形（Convert X into Y） ---
-    m = /\bconvert (?:a friendly unit|this unit|target unit|a card in hand|two cards in your deck|it)(?: with [a-z0-9 ]{1,26}?)? into (?:a |an |your |target )?([A-Z0-9'\-\. ]{2,44})/i.exec(t);
+    // "Convert this unit into target unit."（5th WILNO）—— 复制目标的卡面
+    if (/convert this unit into target unit/i.test(t)) { ops.push({ op: 'convertIntoTarget' }); return ops; }
+    m = /\bconvert (?:a friendly unit|this unit|target unit|a card in hand|two cards in your deck|it)(?: with [a-z0-9 ]{1,26}?)? into (?:a |an |your |target )?([A-Z0-9\u00C0-\u024F'\-\. ]{2,44})/i.exec(t);
     if (m) { ops.push({ op: 'convert', to: m[1].trim() }); return ops; }
 
     // --- 手牌费用修正 ---
@@ -1879,6 +1914,15 @@
     { re: /this unit deals? damage to (?:a |an |the )?(?:enemy )?unit\b/i, ev: 'selfDamageUnit' },
     { re: /this unit attacks? (?:an? |the )?pinned unit\b/i, ev: 'selfAttack', cond: { c: 'targetPinned' } },
     { re: /this unit attacks?\b/i, ev: 'selfAttack' },
+    // v48：被敌方攻击 / 被敌方指定 / 我方以特定单位攻击
+    { re: /(?:the )?enemy attacks? (?:it|this unit)\b/i, ev: 'selfAttacked' },
+    { re: /(?:the )?enemy targets? (?:or attacks? )?(?:it|this unit)\b/i, ev: 'selfAttacked' },
+    { re: /this unit is targeted by (?:an? )?enemy/i, ev: 'selfAttacked' },
+    { re: /you attack with an? (german|soviet|american|british|japanese|french|italian|polish|finnish) (tank|infantry|artillery|fighter|bomber)\b/i,
+      ev: 'ownAttackWith', cond: m => ({ c: 'eventAnd', and: [{ c: 'eventNation', nation: NAT_MAP[m[1].toLowerCase()] || m[1] }, { c: 'eventType', type: m[2].toLowerCase() }] }) },
+    { re: /you attack with an? ([A-Z][A-Za-z0-9'\- ]{2,}?)(?: unit)?(?:,|\s*$)/i, ev: 'ownAttackWith', cond: m => ({ c: 'eventName', name: m[1].trim() }) },
+    { re: /you deploy a (tank|infantry|artillery|fighter|bomber) with (\d+) or more attack\b/i,
+      ev: 'ownDeploy', cond: m => ({ c: 'eventAnd', and: [{ c: 'eventType', type: m[1].toLowerCase() }, { c: 'eventAttackLeast', n: +m[2] }] }) },
     { re: /this unit is dealt damage\b|^this unit takes damage\b/i, ev: 'selfDamaged' },
     { re: /this unit (?:is destroyed|dies)\b/i, ev: 'selfDestroy' },
     { re: /this unit moves? into the frontline\b/i, ev: 'selfMoveFront' },
@@ -2672,7 +2716,7 @@
       for (let di = 0; di < destTimes; di++) {
         for (const cl of clauses) {
           if (cl.kind !== 'destruction') continue;
-          this.execOps(cl.ops, c, { killer });
+          this.execOps(cl.ops, c, { killer, destroyed: true });
         }
       }
       // 被授予的亡计能力（"Your units get: "Destruction: ...""）
@@ -3093,6 +3137,12 @@
       }
       // "When this unit attacks…" 触发（宣告攻击时结算，覆盖伏击/冲击等分支）
       this.fireTrigger('selfAttack', { uid: atk.uid, target: def.uid }, u => u.uid === atk.uid);
+      // "When the enemy attacks it…"（LAYFORCE / RAF MUSTANG）
+      this.fireTrigger('selfAttacked', { uid: def.uid, owner: def.owner, type: def.type, nation: def.nation, card: def, attacker: atk },
+        u => u.owner === def.owner);
+      // "When you attack with a <name>/<nation type>…"（AVRO ANSON / SU-85）
+      this.fireTrigger('ownAttackWith', { side: atk.owner, card: atk, uid: atk.uid, type: atk.type, nation: atk.nation },
+        u => u.owner === atk.owner && u.uid !== atk.uid);
 
       // 伏击：每回合仅首次被攻击时生效；对无法反击的搭配（炮兵/轰炸机）无效
       const ambush = def.has('ambush') && def._ambushTurn !== this.turn && this.canCounter(atk, def);
@@ -3172,6 +3222,20 @@
       if (this.canCounter(atk, def)) dToAtk = dmg(def, atk, defSilenced);
       if (dToDef > 0) def.defense -= dToDef;
       if (dToAtk > 0) atk.defense -= dToAtk;
+      // "It deals 0-1 additional damage."（KATYUSHA）
+      if (atk._extraDmgMax) {
+        const extra = Math.floor(this.rng.next() * (atk._extraDmgMax + 1));
+        if (extra > 0) { def.defense -= extra; this.log(`${atk.name} 额外造成 ${extra} 点伤害`); }
+      }
+      // "Distribute 3 damage between random enemies."（LONG TOM）
+      if (atk._distributeOnAttack) {
+        for (let i = 0; i < atk._distributeOnAttack; i++) {
+          const list = this.unitsOf(1 - atk.owner).filter(u => u.defense > 0);
+          if (!list.length) break;
+          this.damageCard(this.rng.pick(list), 1, atk);
+        }
+        this.log(`${atk.name} 随机分配 ${atk._distributeOnAttack} 点伤害`);
+      }
       this.log(`${def.name} 受到 ${dToDef} 点伤害，${atk.name} 受到 ${dToAtk} 点反击伤害`);
       const defDies = def.defense <= 0;
       const atkDies = atk.defense <= 0;
@@ -3367,6 +3431,21 @@
     teamAuraFor(card, kind) {
       if (!card || !card.isUnit) return 0;
       let d = 0;
+      // 玩家级光环（亡计类"我方某类单位费用 -1"在施放单位离场后仍生效）
+      for (const p of [this.players[0], this.players[1]]) {
+        for (const a of (p._teamAuras || [])) {
+          if (a.kind !== kind) continue;
+          const appliesTo = a.side === 'enemy' ? (card.owner !== 0 && p === this.players[0]) || (card.owner !== 1 && p === this.players[1]) : card.owner === (p === this.players[0] ? 0 : 1);
+          if (!appliesTo) continue;
+          if (a.f.other) continue;
+          if (a.f.type && card.type !== a.f.type) continue;
+          if (a.f.nation && card.nation !== a.f.nation) continue;
+          if (a.f.ground && !['infantry', 'tank', 'artillery'].includes(card.type)) continue;
+          if (a.f.air && !['fighter', 'bomber'].includes(card.type)) continue;
+          if (a.f.minAttack != null && card.totalAttack < a.f.minAttack) continue;
+          d += a.delta || 0;
+        }
+      }
       for (const u of [...this.unitsOf(0), ...this.unitsOf(1)]) {
         for (const a of (u._teamAuras || [])) {
           if (a.kind !== kind) continue;
@@ -3754,8 +3833,9 @@
       switch (op.op) {
         // ---- 队伍级光环（关键词 / 行动费 / 部署费）----
         case 'teamAura': {
-          src._teamAuras = src._teamAuras || [];
-          src._teamAuras.push({ kind: op.kind, delta: op.delta || 0, kw: op.kw, side: op.side, f: op.f || {} });
+          const host = (ctx && (ctx.trigger || ctx.destroyed)) ? this.players[me] : src;
+          host._teamAuras = host._teamAuras || [];
+          host._teamAuras.push({ kind: op.kind, delta: op.delta || 0, kw: op.kw, side: op.side, f: op.f || {} });
           if (op.kind === 'keyword' && op.kw) {
             // 近似：部署时点给当前场上符合条件的目标授予关键词
             for (const u of this.unitsOf(me)) {
@@ -3851,8 +3931,9 @@
         case 'hqGainFromDamage': {
           if (ctx && ctx.amount) {
             const pl = this.players[me];
-            const add = Math.min(ctx.amount, Math.max(0, pl.hqMaxDef - pl.hqDef));
-            if (add > 0) { pl.hqDef += add; this.log(`总部回复 ${add} 点防御`); }
+            pl.hqMaxDef += ctx.amount;
+            pl.hqDef += ctx.amount;
+            this.log(`总部 +${ctx.amount} 防御（上限同步）`);
           } else {
             src._hqGainFromDamage = true;
             this.log(`${src.name}：受伤时总部回复等量防御`);
@@ -4295,6 +4376,7 @@
             }
             return t;
           };
+          if (op.target === 'self') { if (src && src.isUnit) apply(src, n); break; }
           if (op.target === 'enemyHQ') { this.damageHq(foe, typeof n === 'number' ? n : src.totalAttack, src); break; }
           // "Deal N damage to your HQ" —— 自伤（此前误写成加血，且被上限截断，静默失效）
           if (op.target === 'ownHQ') { this.damageHq(me, n, src); break; }
@@ -4639,6 +4721,12 @@
           const n = op.calc ? (this.countOf(op.calc, src, ctx) || 0) : op.n;
           if (!n) break;
           const bonus = p._hqHealBonus || 0;
+          // "When a HQ gains defense, it takes that much damage instead."（TYPE 89）
+          if (this.unitsOf(me).some(u => u._hqHealToDamage)) {
+            this.log('总部回血被 TYPE 89 反转为伤害');
+            this.damageHq(me, n, null);
+            break;
+          }
           p.hqMaxDef += n;
           p.hqDef += n + bonus;
           this.log(`我方总部防御 +${n}${bonus ? `（加成 +${bonus}）` : ''}`);
@@ -5038,6 +5126,81 @@
           this.draw(0, 1, true);
           this.draw(1, 1, true);
           this.log('双方各抽一张牌');
+          break;
+        }
+        case 'convertIntoTarget': {
+          // "Convert this unit into target unit."（5th WILNO）—— 变成目标卡的复制
+          const t = pickUnit('unit');
+          if (!t || t.uid === src.uid) break;
+          const nc = new CardInst(t.def, src.owner, this);
+          nc.uid = src.uid; nc.loc = src.loc; nc.slot = src.slot;
+          nc.summonedTurn = src.summonedTurn; nc.defense = t.defense;
+          const row = src.loc === 'front' ? this.frontline : this.players[src.owner].board;
+          const idx = row.indexOf(src);
+          if (idx >= 0) row[idx] = nc;
+          this.log(`${src.name} 变为 ${nc.name}`);
+          break;
+        }
+        case 'spawnLastDestroyed': {
+          const list = (this._destroyedThisTurn || []).filter(x => op.air ? ['fighter', 'bomber'].includes(x.def.type) : ['infantry', 'tank', 'artillery'].includes(x.def.type));
+          const last = list.length ? list[list.length - 1] : null;
+          if (!last) { this.log('没有可复活的阵亡单位'); break; }
+          const nc = new CardInst(last.def, me, this);
+          nc.loc = 'board'; nc.summonedTurn = this.turn;
+          this.players[me].board.push(nc);
+          this.log(`复活 ${nc.name} 到支援线`);
+          break;
+        }
+        case 'teamDeckCost': {
+          const pl = this.players[me];
+          for (const c of [...pl.hand, ...pl.deck]) {
+            if (op.nation && c.nation !== op.nation) continue;
+            if (op.type && c.type !== op.type) continue;
+            c._costMod = (c._costMod || 0) + (op.n || -1);
+          }
+          this.log('手牌与牌库中符合条件的单位费用下调');
+          break;
+        }
+        case 'convertEnemyHand': {
+          const ep2 = this.players[foe];
+          if (!ep2.hand.length) break;
+          const def2 = this.findByName(op.to)[0];
+          if (!def2) break;
+          const i2 = Math.floor(this.rng.next() * ep2.hand.length);
+          const old2 = ep2.hand[i2];
+          const nc = new CardInst(def2, foe, this);
+          nc.loc = 'hand';
+          ep2.hand[i2] = nc;
+          this.log(`敌方手牌 ${old2.name} 变为 ${nc.name}`);
+          break;
+        }
+        case 'fightRandom': {
+          // "it fights a random enemy unit"（57th RIFLES）—— 刚部署的单位与随机敌人交战
+          const fighter = (ctx && ctx.card && ctx.card.isUnit) ? ctx.card : null;
+          const prey = this.unitsOf(foe).filter(u => u.defense > 0);
+          if (!fighter || !prey.length) { this.log('没有可交战的敌人'); break; }
+          const victim = this.rng.pick(prey);
+          const d1 = Math.max(0, fighter.totalAttack - victim.heavyArmor);
+          const d2 = Math.max(0, victim.totalAttack - fighter.heavyArmor);
+          victim.defense -= d1; fighter.defense -= d2;
+          this.log(`${fighter.name} 与 ${victim.name} 交战：${d1}/${d2}`);
+          if (victim.defense <= 0) this.destroyCard(victim, fighter);
+          if (fighter.defense <= 0) this.destroyCard(fighter, victim);
+          break;
+        }
+        case 'hqHealToDamage': {
+          // "When a HQ gains defense, it takes that much damage instead."（TYPE 89）
+          src._hqHealToDamage = true;
+          this.log(`${src.name}：总部回血改为受到等量伤害`);
+          break;
+        }
+        case 'extraDmg': {
+          src._extraDmgMax = op.max || 1;
+          this.log(`${src.name} 攻击时额外造成 0-${op.max || 1} 点伤害`);
+          break;
+        }
+        case 'distributeOnAttack': {
+          src._distributeOnAttack = op.n || 3;
           break;
         }
         case 'destructionTwiceAura': {

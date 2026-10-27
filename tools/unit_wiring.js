@@ -149,9 +149,69 @@ function runPair(def, cl, cfg) {
         g.destroyCard(s, null);
       } else if (cl.kind === 'trigger') {
         s.loc = 'board'; s.slot = 1; s.summonedTurn = 0; g.players[0].board.push(s);
+        s.summonedTurn = -1; s.hasAttacked = false; s.attacksLeft = 1;
         before = snap(g);
-        const payload = { uid: s.uid, owner: 0, type: s.type, nation: s.nation, attack: s.totalAttack, card: s, amount: 2, side: 0 };
-        g.fireTrigger(cl.event, payload, u => u.uid === s.uid);
+        // 用**真实动作**驱动事件，而不是硬派发（否则"部署另一个单位"类事件拿不到正确载荷）
+        const ev = cl.event;
+        if (cfg.direct) {
+          const payload = { uid: s.uid, owner: 0, type: s.type, nation: s.nation, attack: s.totalAttack, card: s, amount: 2, side: 0 };
+          g.fireTrigger(ev, payload, u => u.uid === s.uid);
+        } else if (ev === 'ownDeploy' || ev === 'ownGuardDeploy') {
+          const nd = new Engine.CardInst(FILL[1], 0, g);
+          nd.loc = 'hand'; g.players[0].hand.push(nd);
+          if (ev === 'ownDeploy' && cfg.triggerKw) nd.keywords.add(cfg.triggerKw);
+          g.playCard(0, g.players[0].hand.indexOf(nd), {});
+        } else if (ev === 'selfAttack' || ev === 'selfAttackHQ' || ev === 'selfKill' || ev === 'selfDamageUnit') {
+          s.loc = 'front'; s.buffAttack += 2;
+          const bi = g.players[0].board.indexOf(s); if (bi >= 0) g.players[0].board.splice(bi, 1);
+          if (!g.frontline.includes(s)) g.frontline.push(s);
+          g.frontlineOwner = 0;
+          if (ev === 'selfAttackHQ') g.attack(0, s.uid, 0);
+          else {
+            const foeU = g.unitsOf(1).find(u => u.defense > 0 && u.uid !== s.uid) || null;
+            if (foeU) { if (cfg.pinTarget) foeU._pinned = true; g.attack(0, s.uid, foeU.uid); }
+          }
+        } else if (ev === 'allyKill' || ev === 'unitDestroyed') {
+          const victim = new Engine.CardInst(FILL[2], 1, g);
+          victim.loc = 'board'; victim.summonedTurn = 0; g.players[1].board.push(victim);
+          g.destroyCard(victim, s);
+        } else if (ev === 'selfAttacked') {
+          // 敌方单位攻击我方这张卡
+          s.loc = 'front'; s.defense = Math.max(s.defense, 12);
+          const bi = g.players[0].board.indexOf(s); if (bi >= 0) g.players[0].board.splice(bi, 1);
+          if (!g.frontline.includes(s)) g.frontline.push(s);
+          g.frontlineOwner = 0;
+          const raider = new Engine.CardInst(FILL[1], 1, g);
+          raider.loc = 'front'; raider.summonedTurn = -1; raider.buffAttack += 1;
+          g.frontline.push(raider);
+          g.attack(1, raider.uid, s.uid);
+        } else if (ev === 'ownAttackWith') {
+          s.loc = 'front'; s.buffAttack += 2;
+          const bi2 = g.players[0].board.indexOf(s); if (bi2 >= 0) g.players[0].board.splice(bi2, 1);
+          if (!g.frontline.includes(s)) g.frontline.push(s);
+          g.frontlineOwner = 0;
+          const foeU = g.unitsOf(1).find(u => u.defense > 0) || null;
+          if (foeU) g.attack(0, s.uid, foeU.uid);
+        } else if (ev === 'selfDamaged') {
+          g.damageCard(s, 2, null);
+        } else if (ev === 'ownHqHealed') {
+          g.execOp({ op: 'hqDef', n: 2 }, s, {});
+        } else if (ev === 'enemyHqHealed') {
+          g.execOp({ op: 'hqDef', n: 2 }, g.unitsOf(1)[0] || s, {});
+        } else if (ev === 'enemyMoveFront') {
+          const mv = new Engine.CardInst(FILL[2], 1, g);
+          mv.loc = 'board'; mv.summonedTurn = -1; mv.hasAttacked = false;
+          g.players[1].board.push(mv);
+          g.move(1, mv.uid, true);
+        } else if (ev === 'ownDraw') {
+          g.draw(0, 1, true);
+        } else if (ev === 'ownOrder' || ev === 'ownCardPlayed') {
+          const od = db.cards.find(c => c.type === 'order' && (c.cost || 0) <= 2);
+          if (od) { const oc = new Engine.CardInst(od, 0, g); oc.loc = 'hand'; g.players[0].hand.push(oc); g.playCard(0, g.players[0].hand.indexOf(oc), {}); }
+        } else {
+          const payload = { uid: s.uid, owner: 0, type: s.type, nation: s.nation, attack: s.totalAttack, card: s, amount: 2, side: 0 };
+          g.fireTrigger(ev, payload, u => u.uid === s.uid);
+        }
       } else if (cl.kind === 'pincer') {
         const pincerFiller = db.cards.find(x => x.has && x.has('pincer') && x.id !== def.id)
           || db.cards.find(x => (x.keywords || []).includes('pincer')) || FILL[2];
@@ -211,6 +271,11 @@ function probe(def, cl) {
   ];
   if (cl.kind === 'deployment') {
     for (const env of ENVS) for (const front of [false, true]) for (const c of targetsFor(front)) cfgs.push({ ...c, env });
+  } else if (cl.kind === 'trigger') {
+    // 部署类触发要把"新部署的单位"标记成不同关键词各试一次（高山/流亡/守护…）
+    for (const kw of ['', 'alpine', 'exile', 'guard']) cfgs.push({ env: {}, front: false, triggerKw: kw || undefined });
+    cfgs.push({ env: {}, front: false, pinTarget: true });
+    cfgs.push({ env: {}, front: false, direct: true });   // 兜底：直接派发（验证接线本身）
   } else {
     for (const env of ENVS) cfgs.push({ env, front: false });
   }
