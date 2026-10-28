@@ -519,16 +519,20 @@
         const st = UI.state;
         const side = which === 'own' ? st.you : 1 - st.you;
         const hq = st.players[side].hq || {};
-        showPopup({ name: hq.name || '总部', nation: hq.nation, type: 'hq', defense: st.players[side].hqDef, text: hq.text || '', image: null }, e.clientX, e.clientY);
+        showPopup({ name: hq.name || '总部', nation: hq.nation, type: 'hq', defense: st.players[side].hqDef, text: hq.text || '', image: hq.image || null }, e.clientX, e.clientY);
       });
       el.addEventListener('mouseleave', () => hidePopup());
     }
     const nation = (p.hq && p.hq.nation) || 'Neutral';
     // 优先用该 HQ 卡自带的图（官方 id 精确映射），其次国家兜底，最后占位
-    const img = (p.hq && p.hq.image) || HQ_IMAGES[nation] || 'Bunker_Blank.jpg';
+    // 注意：hqs.json 里的 image 是 "res/hq-cards/Xxx.jpg" 这种带目录的路径，要走 /cards/ 路由；
+    // HQ_IMAGES 兜底表是纯文件名，走 /assets/hq/。混用会导致背景 404 → HQ 变透明卡框。
+    const rawImg = (p.hq && p.hq.image) || HQ_IMAGES[nation] || 'Bunker_Blank.jpg';
+    const img = rawImg;
     if (el.dataset.img !== img) {
       el.dataset.img = img;
-      el.style.backgroundImage = `url('/assets/hq/${img}')`;
+      const url = rawImg.indexOf('/') >= 0 ? `/cards/${rawImg}` : `/assets/hq/${rawImg}`;
+      el.style.backgroundImage = `url('${url}')`;
       el.title = (p.hq && p.hq.name) || '总部';
     }
     let badge = el.querySelector('.hq-def-badge');

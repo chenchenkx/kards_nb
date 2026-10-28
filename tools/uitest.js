@@ -68,7 +68,11 @@ setTimeout(async () => {
       return kids.length === 5 && kids[2].id === 'own-hq-slot';
     })());
     check('HQ cards rendered in rows', doc.querySelectorAll('.hq-card').length === 2);
-    check('HQ card has art', /hq\//.test(doc.querySelector('.hq-card').style.backgroundImage));
+    check('HQ card has art', (() => {
+      const bg = doc.querySelector('.hq-card').style.backgroundImage;
+      // 合法路由二选一：/assets/hq/<纯文件名> 或 /cards/res/hq-cards/<文件名>；其余（如 /assets/hq/res/...）都是 404 坏路径
+      return /\/assets\/hq\/[^/'"]+\.jpg/.test(bg) || /\/cards\/res\/hq-cards\/[^/'"]+\.jpg/.test(bg);
+    })());
     check('frontline dashed line rendered', !!doc.querySelector('.fl-dashes'));
     check('end turn button rendered', !!doc.getElementById('btn-end-turn'));
     check('opponent card backs rendered', doc.querySelectorAll('#opp-hand .card-back').length >= 4);
