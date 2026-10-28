@@ -2980,15 +2980,16 @@
       return this.supportCount(c.owner) < RULES.MAX_ROW;
     }
 
-    playCard(side, handIndex, opts) {
-      opts = opts || {};
-      if (this.pendingChoose) return { ok: false, error: '请先完成二选一' };
-
-      if (this.done || this.current !== side) return { ok: false, error: '还没到你的回合' };
+    /**
+     * 手牌第 handIndex 张的实际出牌费用。
+     * playCard 的合法性校验与 AI 判费共用本方法，保证口径完全一致
+     * （含手牌费用增减、最左手牌加价、首张指令折扣、敌方手牌税、天气折扣、
+     *   敌方首卡双倍、"本回合有单位阵亡则 0 费"等全部修正）。
+     */
+    handCost(side, handIndex) {
       const p = this.players[side];
       const c = p.hand[handIndex];
-      if (!c) return { ok: false, error: '找不到该卡牌' };
-      // 动态费用：手牌费用增减 + 最左手牌折扣 + 首张指令折扣 + 敌方手牌税
+      if (!c) return null;
       const extraCost = (c._costMod || 0)
         + (handIndex === 0 ? (p._leftmostCost || 0) : 0)
         + (c.type === 'order' && !(p.ordersPlayedThisTurn > 0) ? (p._firstOrderDiscount || 0) : 0)
@@ -2999,7 +3000,19 @@
         + ((this._enemyFirstCardDouble && p.playedThisTurn === 0 && p._enemyFirstDoubleOwner) ? c.cost : 0)
         + ((/deploys? for 0 kredits if a friendly unit was destroyed this turn/i.test(c.text || '') && p._lostUnitThisTurn) ? -(c.cost || 0) : 0)
         + ((c.type === 'weather' && p._weatherCostDiscount) ? -(p._weatherCostDiscount) : 0);
-      const costNow = Math.max(0, c.cost + extraCost);
+      return Math.max(0, c.cost + extraCost);
+    }
+
+    playCard(side, handIndex, opts) {
+      opts = opts || {};
+      if (this.pendingChoose) return { ok: false, error: '请先完成二选一' };
+
+      if (this.done || this.current !== side) return { ok: false, error: '还没到你的回合' };
+      const p = this.players[side];
+      const c = p.hand[handIndex];
+      if (!c) return { ok: false, error: '找不到该卡牌' };
+      // 动态费用：统一走 handCost（与 AI 判费同口径）
+      const costNow = this.handCost(side, handIndex);
       if (costNow > p.kredits) return { ok: false, error: '指挥点不足' };
       if (!this.hasRoomFor(c)) return { ok: false, error: '战场没有空位' };
       // 部署条件（文本直判："若本回合已部署过单位则不能部署 / 需要 N 个指挥点槽"）

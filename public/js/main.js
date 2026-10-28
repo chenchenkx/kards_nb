@@ -632,6 +632,7 @@
     });
     App.netGame = false;
     App.mySeat = 0;
+    if (App.aiTimer) { clearTimeout(App.aiTimer); App.aiTimer = null; }  // 清掉旧对局的 AI 循环
     App.engine.humanSides = [true, false];   // 玩家手动二选一，AI 自动选第一项
     UI.engine = App.engine;
     UI.onAction = (type, payload) => handleLocalAction(type, payload);
@@ -765,22 +766,65 @@
     } else { checkEnd(); maybeAiTurn(); }
   }
 
+  // ---------------- AI 回合：分步执行 ----------------
+  // AI 每做一个动作就渲染 + 播动画 + 停顿随机时间再继续，
+  // 指挥点消耗、出牌、攻击逐张可见；每步都从实时局面重新决策。
+  function aiGuard(g) {
+    // 对局被替换/已结束/轮到玩家/切到联机 → 立即终止 AI 循环
+    return App.engine === g && !g.done && g.current === 1 && !App.netGame;
+  }
+
   function maybeAiTurn() {
     const g = App.engine;
     if (!g || g.done || g.current !== 1) return;
-    setTimeout(() => {
-      if (!App.engine || App.engine.done || App.engine.current !== 1) return;
-      const before = App.engine.logLines.length;
-      KardsAI.takeTurn(App.engine, 1);
-      const newLines = App.engine.logLines.slice(before);
-      for (const l of newLines) UI.logLine(l);
-      const events = App.engine.drainEvents();
+    App.aiSkip = new Set();      // 本回合被引擎拒绝过的动作签名
+    App.aiTimer = setTimeout(aiStep, 900);
+  }
+
+  function aiStep() {
+    const g = App.engine;
+    if (!g || !aiGuard(g)) return;
+    const before = g.logLines.length;
+    const act = KardsAI.nextAction(g, 1, App.aiSkip);
+    let res = { ok: true };
+
+    if (!act) {
+      // 没事可做 → 结束回合
+      g.endTurn();
+      for (const l of g.logLines.slice(before)) UI.logLine(l);
+      const events = g.drainEvents();
       renderAll();
       if (events.length) {
         beginBusy();
         UI.playEvents(events, () => { endBusy(); renderAll(); checkEnd(); });
       } else checkEnd();
-    }, 700);
+      return;
+    }
+
+    try {
+      if (act.kind === 'play') res = g.playCard(1, act.handIndex, {});
+      else if (act.kind === 'move') res = g.move(1, act.uid, act.toFront);
+      else if (act.kind === 'attack') res = g.attack(1, act.uid, act.target);
+    } catch (e) { res = { ok: false, error: String(e) }; }
+
+    if (!res.ok) {
+      // 引擎拒绝该动作：拉黑签名，短停顿后尝试其他动作（保证推进，不死循环）
+      if (App.aiSkip) App.aiSkip.add(act.kind + ':' + act.uid);
+      App.aiTimer = setTimeout(aiStep, 260);
+      return;
+    }
+
+    for (const l of g.logLines.slice(before)) UI.logLine(l);
+    const events = g.drainEvents();
+    renderAll();  // 每张牌打出后立即刷新：指挥点变化逐张可见
+    const scheduleNext = () => {
+      if (!aiGuard(g)) { checkEnd(); return; }
+      App.aiTimer = setTimeout(aiStep, KardsAI.delay());
+    };
+    if (events.length) {
+      beginBusy();
+      UI.playEvents(events, () => { endBusy(); renderAll(); checkEnd(); scheduleNext(); });
+    } else scheduleNext();
   }
 
   function checkEnd() {

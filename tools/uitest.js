@@ -1,10 +1,21 @@
-/* DOM-level UI test using jsdom: loads the real page and plays a game. */
+/* DOM-level UI test using jsdom: loads the real page and plays a game.
+ * 脚本全部内联执行（不依赖 8080 是否有服务器在跑），fetch/WebSocket 打桩。 */
 const fs = require('fs');
 const path = require('path');
 const { JSDOM, VirtualConsole } = require('jsdom');
 
 const ROOT = path.join(__dirname, '..');
-const html = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+const html0 = fs.readFileSync(path.join(ROOT, 'public', 'index.html'), 'utf8');
+
+// 把 <script src="..."> 全部替换为内联脚本（从磁盘读取），避免外部资源加载
+const html = html0.replace(
+  /<script src="([^"]+)"[^>]*><\/script>/g,
+  (m, src) => {
+    const file = path.join(ROOT, 'public', src.replace(/^\//, '').split('?')[0]);
+    const code = fs.readFileSync(file, 'utf8');
+    return '<script>/* inlined: ' + src + ' */\n' + code + '\n</script>';
+  }
+);
 
 const errors = [];
 const vc = new VirtualConsole();
@@ -14,29 +25,29 @@ vc.on('error', (...a) => errors.push('CONSOLE: ' + a.join(' ')));
 const dom = new JSDOM(html, {
   url: 'http://localhost:8080/',
   runScripts: 'dangerously',
-  resources: 'usable',
   pretendToBeVisual: true,
   virtualConsole: vc,
+  beforeParse(window) {
+    // stub fetch to load local data files（必须在页面脚本执行前装好）
+    window.fetch = (url) => {
+      const p = url.replace(/^.*?\/\/[^/]+/, '').split('?')[0];
+      const file = path.join(ROOT, p.replace(/^\//, ''));
+      try {
+        const data = fs.readFileSync(file, 'utf8');
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(JSON.parse(data)) });
+      } catch (e) {
+        return Promise.resolve({ ok: false, json: () => Promise.resolve({}) });
+      }
+    };
+    // stub WebSocket (no server needed for AI mode)
+    window.WebSocket = function () {
+      this.readyState = 1;
+      this.send = () => {};
+      this.close = () => {};
+    };
+  },
 });
 const { window } = dom;
-
-// stub fetch to load local data files
-window.fetch = (url) => {
-  const p = url.replace(/^.*?\/\/[^/]+/, '').split('?')[0];
-  const file = path.join(ROOT, p.replace(/^\//, ''));
-  try {
-    const data = fs.readFileSync(file, 'utf8');
-    return Promise.resolve({ ok: true, json: () => Promise.resolve(JSON.parse(data)) });
-  } catch (e) {
-    return Promise.resolve({ ok: false, json: () => Promise.resolve({}) });
-  }
-};
-// stub WebSocket (no server needed for AI mode)
-window.WebSocket = function () {
-  this.readyState = 1;
-  this.send = () => {};
-  this.close = () => {};
-};
 
 setTimeout(async () => {
   try {

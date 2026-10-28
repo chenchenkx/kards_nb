@@ -8,7 +8,8 @@
     "test": "node tools/ruletest.js && node tools/selftest.js 10",
     "test:lan": "node tools/lantest.js",
     "test:ui": "node tools/uitest.js",
-    "test:trigger": "node tools/trigger_test.js"
+    "test:trigger": "node tools/trigger_test.js",
+    "test:ai": "node tools/ai_legality_test.js"
   },
   "keywords": [],
   "author": "",
