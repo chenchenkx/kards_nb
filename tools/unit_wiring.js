@@ -82,15 +82,18 @@ function snap(g) {
   const units = {};
   for (const side of [0, 1]) {
     for (const u of g.unitsOf(side)) {
-      const k = side + '|' + u.name + '|' + u.loc;
+      const k = side + '|' + u.id + '|' + u.loc;   // 用 id：veteran/convert 后 name 可能不变
       (units[k] = units[k] || []).push([u.defense, u.buffAttack, u.buffDefense, [...u.keywords].sort().join('+'),
         [u._pinOnDamage, u._hqDamageRedirect, u._destructionTwice, u._noRetreat, u._pinImmune, u._dmgAddsDefense,
          u._handWatch ? 1 : 0, u._redirectName || '', (u._dmgMods || []).length, (u._teamAuras || []).length,
          u._opCostMod || 0, u._costMod || 0, u._hqFloor || 0, u._hqLossCap || 0,
-         u._noHQAttack ? 1 : 0, u._noAttack ? 1 : 0, u._pinImmune ? 1 : 0, u._ignoreArmor ? 1 : 0,
+         u._noAttack ? 1 : 0, u._pinImmune ? 1 : 0, u._ignoreArmor ? 1 : 0,
+         u._dmgTakenTo == null ? '' : u._dmgTakenTo, u._dmgTakenMult || 1, u._splashAdjacent || 0,
          u._dmgTakenTo == null ? '' : u._dmgTakenTo, u._dmgTakenMult || 1, u._splashAdjacent || 0,
          u._destroyTanksOnDamage ? 1 : 0, u._pinOnDamageAdj ? 1 : 0, u._pinAirOnCombat ? 1 : 0,
-         u._excessToHq ? 1 : 0, u._splashHq ? 1 : 0, u._salvage ? 1 : 0, u.heavyArmor || 0].join('/'),
+         u._excessToHq ? 1 : 0, u._splashHq ? 1 : 0, u._salvage ? 1 : 0, u.heavyArmor || 0,
+         u._noHQ ? 1 : 0, u._enemyTax || 0, u.attacksLeft == null ? '' : u.attacksLeft,
+         u._revealed ? 1 : 0].join('/'),
         u._pinned ? 'P' : '', u._suppressed ? 'S' : '', u.effOpCost, u.loc].join(','));
     }
   }
@@ -103,20 +106,38 @@ function snap(g) {
     deck1: g.players[1].deck.length,
     handCost: g.players[0].hand.map(c => (c.effCost || 0)).join(','),
     handNames: g.players[0].hand.map(c => c.name).sort().join(','),
+    hand1Names: g.players[1].hand.map(c => c.name).sort().join(','),
+    handGotcha: g.players[0].hand.map(c => c.gotchaActive || 0).join(','),
     disc: g.players[0].discard.length, disc1: g.players[1].discard.length,
     front: g.frontlineOwner + '/' + g.frontline.length,
+    deckTop0: g.players[0].deck[0] ? g.players[0].deck[0].name : '',
     flags: [g.players[0]._hqHealBonus || 0, g.players[0]._hqDmgReduce || 0, g.players[0]._deployTwice ? 1 : 0,
       g.players[0]._enemyDeployOpCost || 0, g.players[0]._notFromDeckDiscount || 0,
-      g.players[1]._deployGate || 0].join(','),
+      g.players[1]._deployGate || 0,
+      JSON.stringify(g.players[0]._teamDmgCap || null), g.players[0]._blastDmgBonus || 0,
+      g.players[0]._planDrawBonus || 0, g.players[0]._productionBonus || 0,
+      g.players[0]._weatherCostDiscount || 0, g.players[0]._orderDmgMod || 0].join(','),
   };
 }
+
+/** 把单位放到前线（供精准场景使用） */
+function toFront(u, g) {
+  u.loc = 'front'; u.summonedTurn = -1; u.hasAttacked = false; u.attacksLeft = 1;
+  const bi = g.players[0].board.indexOf(u); if (bi >= 0) g.players[0].board.splice(bi, 1);
+  if (!g.frontline.includes(u)) g.frontline.push(u);
+  g.frontlineOwner = 0;
+}
+
+/** 卡是否本身就是老兵版本（veteran 查找时排除） */
+function _isVet(c) { return /_vet\d*$/i.test(c.id); }
+
 
 function delta(a, b) {
   const out = [];
   for (const k of new Set([...Object.keys(a.units), ...Object.keys(b.units)])) {
     if (a.units[k] !== b.units[k]) out.push(`u:${k}:${a.units[k]}->${b.units[k]}`);
   }
-  for (const f of ['hq', 'k', 'hand', 'deck', 'deck1', 'disc', 'disc1', 'front', 'handCost', 'handNames', 'flags']) {
+  for (const f of ['hq', 'k', 'hand', 'deck', 'deck1', 'disc', 'disc1', 'front', 'handCost', 'handNames', 'hand1Names', 'handGotcha', 'deckTop0', 'flags']) {
     if (a[f] !== b[f]) out.push(`${f}:${a[f]}->${b[f]}`);
   }
   return out.sort();
@@ -131,31 +152,205 @@ function runPair(def, cl, cfg) {
     let before;
     try {
       if (cl.kind === 'deployment') {
+        if (cfg.precise) {
+          // 前置条件场景（按卡文本构造）
+          if (/control an air unit/i.test(cl.text) || /if you control an air/i.test(def.text)) {
+            const air = db.cards.find(c => c.type === 'fighter' || c.type === 'bomber');
+            if (air) { const ai = new Engine.CardInst(air, 0, g); ai.loc = 'board'; ai.summonedTurn = 0; g.players[0].board.push(ai); }
+          }
+          if (/friendly unit|give a friendly/i.test(cl.text)) {
+            // mkGame 默认 ally 可能自带 mobilize 且排在前面：清掉关键词，并把干净友军放最前
+            for (const u of g.players[0].board) u.keywords.delete('mobilize');
+            const frDef = FILL.find(c => !(c.keywords || []).includes('mobilize')) || FILL[0];
+            const fr = new Engine.CardInst(frDef, 0, g); fr.loc = 'board'; fr.summonedTurn = 0;
+            g.players[0].board.unshift(fr);
+          }
+          if (/non-targeted deployment/i.test(def.text)) {
+            // 清掉默认友军，rng 只能挑到带部署效果的单位（纯抽牌部署卡 → draw delta）
+            g.players[0].board.length = 0;
+            const dep = db.cards.find(c => c.type !== 'order' && c.type !== 'gotcha' && c.type !== 'weather'
+              && /deployment:\s*draw a card\.?\s*$/i.test(c.text || ''))
+              || db.cards.find(c => c.type !== 'order' && c.type !== 'gotcha' && c.type !== 'weather' && /deployment:/i.test(c.text || ''));
+            if (dep) { const di = new Engine.CardInst(dep, 0, g); di.loc = 'board'; di.summonedTurn = 0; g.players[0].board.push(di); }
+          }
+          if (/destruction effects/i.test(def.text)) {
+            // 73rd：注入"上回合开始以来"的己方阵亡记录；用无条件亡计卡（洗牌库→deck delta）
+            const dz = db.cards.find(c => c.type !== 'order' && c.type !== 'gotcha' && /destruction:/i.test(c.text || '') && !/\bif\b/i.test(c.text || ''))
+              || db.cards.find(c => c.type !== 'order' && c.type !== 'gotcha' && /destruction:/i.test(c.text || ''));
+            if (dz) {
+              g._destroyedSince = g._destroyedSince || { 0: [], 1: [] };
+              g._destroyedSince[0].push({ def: dz, owner: 0, nation: dz.nation, type: dz.type, turn: g.turn - 1 });
+            }
+          }
+          if (/countermeasure/i.test(def.text)) {
+            const cm = db.cards.find(c => c.type === 'gotcha');
+            if (cm) { const ci = new Engine.CardInst(cm, 0, g); ci.loc = 'hand'; g.players[0].hand.push(ci); }
+          }
+          if (/weather/i.test(def.text)) {
+            const w = db.cards.find(c => c.type === 'weather');
+            if (w) { const wi = new Engine.CardInst(w, 0, g); wi.loc = 'hand'; g.players[0].hand.push(wi); }
+          }
+          // LUBLIN：Reveal target Covert unit——敌方 covert 单位上场
+          if (/covert/i.test(def.text)) {
+            const cv = db.cards.find(c => c.type !== 'order' && c.type !== 'gotcha' && ((c.keywords || []).includes('covert') || /covert/i.test(c.text || '')));
+            if (cv) { const ci = new Engine.CardInst(cv, 1, g); ci.loc = 'board'; ci.summonedTurn = 0; g.players[1].board.push(ci); }
+          }
+          // 32nd INFANTRY：同名卡塞牌库顶（"Draw a X from your deck"）
+          if (/from your deck/i.test(def.text)) {
+            const twin = new Engine.CardInst(def, 0, g);
+            twin.loc = 'deck'; g.players[0].deck.unshift(twin);
+          }
+          // KV-85：先造 last destroyed 记录
+          if (/last destroyed/i.test(def.text)) {
+            const v = new Engine.CardInst(FILL[2], 1, g);
+            v.loc = 'board'; v.summonedTurn = 0; g.players[1].board.push(v);
+            g.destroyCard(v, null);
+          }
+        }
         s.loc = 'hand'; g.players[0].hand.push(s);
         before = snap(g);
         let tgt = foe;
-        if (cfg.target === 'front') tgt = foeFront || foe;
-        else if (cfg.target === 'air') tgt = foeAir || foe;
-        else if (cfg.target === 'ground') tgt = foe;
-        else if (cfg.target === 'ally') tgt = g.players[0].board[0] || foe;
-        const r = g.playCard(0, g.players[0].hand.indexOf(s), {
-          target: tgt && tgt.uid, fromRightmost: cfg.fromRightmost, fromLeftmost: cfg.fromLeftmost,
-        });
-        if (!r || !r.ok) return 'ERR:playCard';
+        if (cfg.precise) {
+          // 精准场景：不传 target（"无指定"语义，避免误导按目标挑选的效果）
+          const r = g.playCard(0, g.players[0].hand.indexOf(s), {});
+          if (!r || !r.ok) return 'ERR:playCard';
+        } else {
+          if (cfg.target === 'front') tgt = foeFront || foe;
+          else if (cfg.target === 'air') tgt = foeAir || foe;
+          else if (cfg.target === 'ground') tgt = foe;
+          else if (cfg.target === 'ally') tgt = g.players[0].board[0] || foe;
+          const r = g.playCard(0, g.players[0].hand.indexOf(s), {
+            target: tgt && tgt.uid, fromRightmost: cfg.fromRightmost, fromLeftmost: cfg.fromLeftmost,
+          });
+          if (!r || !r.ok) return 'ERR:playCard';
+        }
+        if (cfg.precise) {
+          // 后续动作：跨回合效果（下回合扣费 / 回合末激活反制）
+          if (/lose 1 kredit at the start/i.test(def.text)) { g.endTurn(); g.endTurn(); }
+          else if (/activate it at the end/i.test(def.text)) { g.endTurn(); }
+        }
       } else if (cl.kind === 'destruction') {
         s.loc = 'front'; s.slot = 1; s.summonedTurn = 0;
         g.frontline.push(s); g.frontlineOwner = 0;
+        if (cfg.precise) {
+          // 144th：失去的槽位数决定伤害
+          if (/slots/i.test(cl.text)) g.players[0].slots = Math.max(1, g.players[0].slots - 4);
+          // ILYUSHIN/KOKURAS：先造一个阵亡记录
+          if (/last destroyed/i.test(cl.text) || /japanese/i.test(cl.text)) {
+            const v = new Engine.CardInst(FILL[2], 1, g);
+            v.loc = 'board'; v.summonedTurn = 0; g.players[1].board.push(v);
+            g.destroyCard(v, null);
+          }
+          // KOKURAS："If it's the enemy turn"——切到敌方回合
+          if (/enemy turn/i.test(cl.text)) g.current = 1;
+          // 175th：苏联坦克入手牌（降价才可见）
+          if (/tanks in hand and deck/i.test(cl.text)) {
+            const tk = db.cards.find(c => c.nation === 'Soviet' && c.type === 'tank') || FILL[1];
+            const ti = new Engine.CardInst(tk, 0, g); ti.loc = 'hand'; g.players[0].hand.push(ti);
+          }
+        }
         before = snap(g);
         g.destroyCard(s, null);
       } else if (cl.kind === 'trigger') {
         s.loc = 'board'; s.slot = 1; s.summonedTurn = 0; g.players[0].board.push(s);
         s.summonedTurn = -1; s.hasAttacked = false; s.attacksLeft = 1;
+        // enemyMoveFront：s 先上前线（before 含前线位置，撤退回 board 才有 delta）
+        // ownHqHealed：s 先受伤（before 含伤势，修复才有 delta）
+        if (cfg.precise && cl.event === 'enemyMoveFront') toFront(s, g);
+        if (cfg.precise && cl.event === 'ownHqHealed') s.defense = Math.max(1, s.defense - 2);
         before = snap(g);
         // 用**真实动作**驱动事件，而不是硬派发（否则"部署另一个单位"类事件拿不到正确载荷）
         const ev = cl.event;
         if (cfg.direct) {
           const payload = { uid: s.uid, owner: 0, type: s.type, nation: s.nation, attack: s.totalAttack, card: s, amount: 2, side: 0 };
           g.fireTrigger(ev, payload, u => u.uid === s.uid);
+        } else if (cfg.precise) {
+          // ===== 精准场景：为每个事件构造真实前置状态 =====
+          const toFrontline = () => {
+            s.loc = 'front'; s.summonedTurn = -1; s.hasAttacked = false; s.attacksLeft = 1;
+            const bi = g.players[0].board.indexOf(s); if (bi >= 0) g.players[0].board.splice(bi, 1);
+            if (!g.frontline.includes(s)) g.frontline.push(s);
+            g.frontlineOwner = 0;
+          };
+          if (ev === 'selfKill' || ev === 'selfDamageUnit') {
+            // 必杀场景：s 前线高攻，敌方 1 血单位
+            toFrontline(); s.buffAttack += 12;
+            const victim = new Engine.CardInst(FILL[2], 1, g);
+            victim.loc = 'front'; victim.defense = 1; victim.summonedTurn = -1;
+            g.frontline.push(victim);
+            g.attack(0, s.uid, victim.uid);
+          } else if (ev === 'enemyMoveFront') {
+            // 真实对局中 PZL 占线时敌方无法进前线（规则互斥），用直派事件验证接线
+            g.fireTrigger('enemyMoveFront', { uid: 0, owner: 1, type: 'infantry', nation: 'Soviet' }, u => u.owner !== 1);
+          } else if (ev === 'ownDeploy' || ev === 'ownGuardDeploy') {
+            let nd = null;
+            if (/t-34/i.test(cl.text)) nd = db.cards.find(c => /T-34/i.test(c.name) && c.type === 'tank');
+            else if (/veteran|4 or more attack/i.test(cl.text)) {
+              // 排除"部署时自行变老兵"的坦克（会掩盖 delta）；其余带文本坦克可用（其条件在本场景不满足）
+              nd = db.cards.find(c => c.type === 'tank' && (c.attack || 0) >= 4 && !_isVet(c)
+                && !/veteran when you deploy|when you deploy[^.]{0,40}veteran/i.test(c.text || '')
+                && (db.byId[c.id + '_vet'] || db.byId[c.id.replace(/_vet$/, '') + '_vet']));
+            } else if (/higher attack/i.test(cl.text)) {
+              // LIGHT DETACHMENT 15：部署攻击力更高的单位
+              nd = db.cards.find(c => !_isVet(c) && c.type !== 'order' && c.type !== 'gotcha' && (c.attack || 0) > (def.attack || 0) + 2);
+            } else if (/random combat keyword|random keyword/i.test(cl.text)) {
+              // 77th：选无关键词目标（自带关键词会掩盖授予效果）
+              nd = FILL.find(c => !(c.keywords || []).length) || FILL[1];
+            }
+            if (!nd) nd = FILL[1];
+            const inst = new Engine.CardInst(nd, 0, g);
+            inst.loc = 'hand'; g.players[0].hand.push(inst);
+            g.playCard(0, g.players[0].hand.indexOf(inst), {});
+          } else if (ev === 'endOfTurn') {
+            // 敌方单位更多（CANNONE："unless you control more units" 需不满足）+ 本回合真实部署一张
+            for (let i = 0; i < 2; i++) {
+              const fe = new Engine.CardInst(FILL[i], 1, g); fe.loc = 'board'; fe.summonedTurn = 0; g.players[1].board.push(fe);
+            }
+            const nd = new Engine.CardInst(FILL[1], 0, g);
+            nd.loc = 'hand'; g.players[0].hand.push(nd);
+            g.playCard(0, g.players[0].hand.indexOf(nd), {});
+            g.endTurn();
+          } else if (ev === 'startOfTurn') {
+            // 清空手牌（"hand is empty"类条件），真实开始回合
+            g.players[0].hand.length = 0;
+            g.fireTrigger('startOfTurn', { side: 0 }, u => u.owner === 0);
+          } else if (ev === 'ownOperate') {
+            // 真实攻击（攻击会 fire ownOperate 并扣行动费）
+            toFrontline(); s.buffAttack += 3;
+            const foeU = g.unitsOf(1).find(u => u.defense > 0) || null;
+            if (foeU) { foeU.defense = Math.max(foeU.defense, 20); g.attack(0, s.uid, foeU.uid); }
+          } else if (ev === 'ownHqDamaged' || ev === 'enemyHqDamaged') {
+            // "Becomes Veteran when the enemy HQ has taken N or more damage"——真实打 HQ 5 点
+            const side2 = /own hq/i.test(cl.text) ? 0 : 1;
+            g.damageHq(side2, 5, null);
+          } else if (ev === 'ownHqHealed') {
+            // 受伤已在 before 快照前完成，此处给 HQ 加防触发修复
+            g.execOp({ op: 'hqDef', n: 2 }, s, {});
+          } else if (ev === 'selfAttack' || ev === 'selfAttackHQ') {
+            // 敌方高防不死（重置攻击类效果才可见），真实攻击
+            toFrontline(); s.buffAttack += 2;
+            if (ev === 'selfAttackHQ') g.attack(0, s.uid, 0);
+            else {
+              const tanky = new Engine.CardInst(FILL[2], 1, g);
+              tanky.loc = 'front'; tanky.defense = 30; tanky.summonedTurn = -1; tanky.attacksLeft = 1;
+              g.frontline.push(tanky);
+              g.attack(0, s.uid, tanky.uid);
+            }
+          } else if (ev === 'ownAttackWith') {
+            // 用文本指定的单位攻击（如 Spitfire）——名称模糊匹配
+            const nm = /attack with an? ([A-Z][A-Za-z0-9'\- ]{2,}?)(?: unit)?,/.exec(cl.text);
+            const key = nm ? nm[1].trim().toUpperCase() : '';
+            const spec = key ? db.cards.find(c => !_isVet(c) && c.name.toUpperCase().startsWith(key)) : null;
+            const atkDef = spec || FILL[1];
+            const a = new Engine.CardInst(atkDef, 0, g);
+            a.loc = 'front'; a.summonedTurn = -1; a.hasAttacked = false; a.attacksLeft = 1; a.buffAttack += 3;
+            g.frontline.push(a); g.frontlineOwner = 0;
+            const foeU = g.unitsOf(1).find(u => u.defense > 0) || null;
+            if (foeU) g.attack(0, a.uid, foeU.uid);
+          } else {
+            const payload = { uid: s.uid, owner: 0, type: s.type, nation: s.nation, attack: s.totalAttack, card: s, amount: 2, side: 0 };
+            g.fireTrigger(ev, payload, u => u.uid === s.uid);
+          }
         } else if (ev === 'ownDeploy' || ev === 'ownGuardDeploy') {
           const nd = new Engine.CardInst(FILL[1], 0, g);
           nd.loc = 'hand'; g.players[0].hand.push(nd);
@@ -219,8 +414,42 @@ function runPair(def, cl, cfg) {
         c1.loc = 'hand'; g.players[0].hand.push(c1);
         g.playCard(0, g.players[0].hand.indexOf(c1), {});
         s.loc = 'hand'; g.players[0].hand.push(s);
-        before = snap(g);
-        g.playCard(0, g.players[0].hand.indexOf(s), {});
+        if (cfg.precise && /fully repair/i.test(cl.text)) {
+          // 222nd：先部署再受伤，before 快照含伤势，回合末修复才产生可见 delta
+          g.playCard(0, g.players[0].hand.indexOf(s), {});
+          s.defense = Math.max(1, s.defense - 2);
+          before = snap(g);
+        } else {
+          before = snap(g);
+          g.playCard(0, g.players[0].hand.indexOf(s), {});
+        }
+        if (cfg.precise) {
+          // 钳形效果多为"标记 + 后续动作才可见"
+          if (/dealt combat damage by this unit are destroyed/i.test(cl.text)) {
+            // 2nd PARA C：高防目标不死但被 destroyOnDamage 摧毁
+            toFront(s, g); s.buffAttack += 1;
+            const victim = new Engine.CardInst(FILL[2], 1, g);
+            victim.loc = 'front'; victim.defense = 30; victim.summonedTurn = -1; victim.attacksLeft = 1;
+            g.frontline.push(victim);
+            g.attack(0, s.uid, victim.uid);
+          } else if (/damage dealt to this unit is dealt to/i.test(cl.text)) {
+            // KING'S OWN SCOTTISH：s 前线高防挨打 → 伤害转给伙伴（攻击方是敌方，需轮到敌方）
+            toFront(s, g); s.defense = Math.max(s.defense, 20);
+            const raider = new Engine.CardInst(FILL[1], 1, g);
+            raider.loc = 'front'; raider.summonedTurn = -1; raider.hasAttacked = false; raider.attacksLeft = 1; raider.buffAttack += 3;
+            g.frontline.push(raider);
+            g.current = 1;
+            g.attack(1, raider.uid, s.uid);
+            g.current = 0;
+          } else if (/fully repair/i.test(cl.text)) {
+            // 222nd GUARD RIFLES：受伤 → 回合末自愈
+            g.endTurn(); // 受伤已在 before 快照前完成
+          } else if (/put it on top of owner's deck|destroyed, put it on top/i.test(cl.text)) {
+            // T-28：摧毁 → 置牌库顶
+            g.destroyCard(s, null);
+          }
+          // TUPOLEV 等纯标志类：部署即写入快照字段（_enemyTax 已入 snap），无需后续动作
+        }
       } else {
         s.loc = 'hand'; g.players[0].hand.push(s);
         before = snap(g);
@@ -271,17 +500,25 @@ function probe(def, cl) {
   ];
   if (cl.kind === 'deployment') {
     for (const env of ENVS) for (const front of [false, true]) for (const c of targetsFor(front)) cfgs.push({ ...c, env });
+    cfgs.push({ precise: true });
   } else if (cl.kind === 'trigger') {
     // 部署类触发要把"新部署的单位"标记成不同关键词各试一次（高山/流亡/守护…）
     for (const kw of ['', 'alpine', 'exile', 'guard']) cfgs.push({ env: {}, front: false, triggerKw: kw || undefined });
     cfgs.push({ env: {}, front: false, pinTarget: true });
     cfgs.push({ env: {}, front: false, direct: true });   // 兜底：直接派发（验证接线本身）
+    cfgs.push({ precise: true });                          // 精准场景（按事件构造真实前置状态）
+  } else if (cl.kind === 'destruction' || cl.kind === 'pincer') {
+    cfgs.push({ precise: true });
   } else {
     for (const env of ENVS) cfgs.push({ env, front: false });
   }
   for (const cfg of cfgs) {
     const r = runPair(def, cl, cfg);
     if (r.ok) return { ok: true, cfg };
+    if (process.env.PROBE_DEBUG) {
+      const d = String(r.delta || r.err || '');
+      console.error(`  [${def.id}] kind=${cl.kind}${cl.event ? '/' + cl.event : ''} cfg=${JSON.stringify(cfg).slice(0, 50)} -> ${d.slice(0, 130)}`);
+    }
   }
   return { ok: false, err: `${cl.kind}${cl.event ? '/' + cl.event : ''}: no delta` };
 }

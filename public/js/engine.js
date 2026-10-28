@@ -55,6 +55,7 @@
       this.owner = owner;               // 0 | 1
       this.name = def.name;
       this.type = def.type;             // infantry|tank|artillery|fighter|bomber|order|gotcha|location
+      this.subtype = def.subtype || null;  // order 子类型：blast|plan|production（ROYAL SUSSEX 等）
       this.nation = def.nation;
       this.cost = def.cost || 0;
       this.opCost = def.opCost || 0;
@@ -356,6 +357,7 @@
     'you deploy another unit',
     'you play an? [a-z]+ card',
     'your hq takes damage',
+    'enemy hq (?:has )?taken \\d+ or more damage',
     'your hq gains? (?:defense|defence)',
     '(?:targeted|chosen) unit deals? damage',
     'attack is \\d+\\+',
@@ -483,6 +485,13 @@
       if (/enemy units are pinned until end of turn after they (?:operate or )?are deployed/i.test(t)) {
         ops.push({ op: 'pinEnemyOnDeploy' }); return ops;
       }
+      // ROYAL SUSSEX：order 子类型光环（数据层已补 subtype 字段）
+      m = /^your blasts deal \+(\d+) damage\.?$/i.exec(t);
+      if (m) { ops.push({ op: 'blastDmgBonus', n: +m[1] }); return ops; }
+      m = /^your plans draw \+(\d+) cards?\.?$/i.exec(t);
+      if (m) { ops.push({ op: 'planDrawBonus', n: +m[1] }); return ops; }
+      m = /^your productions give \+(\d+) kredits?\.?$/i.exec(t);
+      if (m) { ops.push({ op: 'productionBonus', n: +m[1] }); return ops; }
       if (ops.length) return ops;
     }
 
@@ -1299,6 +1308,9 @@
     // "At the end of turn, Convert into MOSQUITO F Mk II."
     m = /convert into (.+?)\.?$/i.exec(t);
     if (m) { ops.push({ op: 'convert', name: m[1].trim() }); return ops; }
+    // "Convert a card in hand into X."（KV-85）——手牌卡变形
+    m = /convert a card in hand into (.+?)\.?$/i.exec(t);
+    if (m) { ops.push({ op: 'convert', target: 'handCard', to: m[1].trim() }); return ops; }
     // "All enemy units are Converted into ROUTED TROOPS."（CAPITULATION）
     m = /(?:(all|each|every) )?(?:enemy|target enemy) units? (?:are |is |get )?converted into (.+?)\.?$/i.exec(t);
     if (m) { ops.push({ op: 'convert', target: /all|each|every/i.test(m[1] || '') ? 'allEnemyUnits' : 'enemyUnit', to: m[2].trim() }); return ops; }
@@ -2108,6 +2120,7 @@
     { re: /you (?:add or )?deploy (?:or add )?another exile unit\b/i, ev: 'ownDeploy', cond: { c: 'eventKw', kw: 'exile' } },
     { re: /you (?:deploy or add|add or deploy) a (.+?) tank\b/i, ev: 'ownDeploy', cond: m => ({ c: 'eventName', name: m[1].trim() }) },
     { re: /the enemy hq gains? (?:defense|defence)\b/i, ev: 'enemyHqHealed' },
+    { re: /(?:the )?enemy hq (?:has )?taken (\d+) or more damage\b/i, ev: 'enemyHqDamaged', cond: m => ({ c: 'eventAmountLeast', n: +m[1] }) },
     { re: /(?:the )?enemy hq takes damage\b/i, ev: 'enemyHqDamaged' },
     { re: /the enemy deploys?\b/i, ev: 'enemyDeploy' },
     { re: /the enemy (?:plays?|gives? an? order)\b/i, ev: 'enemyOrder' },
@@ -2373,6 +2386,7 @@
       case 'eventKw': return !!(ctx && ctx.card && ctx.card.has && ctx.card.has(cond.kw));
       case 'eventName': return !!(ctx && ctx.card && new RegExp(cond.name, 'i').test(ctx.card.name));
       case 'eventAttackLeast': return !!(ctx && (ctx.attack || 0) >= (cond.n || 0));
+      case 'eventAmountLeast': return !!(ctx && (ctx.amount || 0) >= (cond.n || 0));
       case 'eventOpCostLeast': return !!(ctx && ctx.card && ((ctx.card.opCost || 0)) >= (cond.n || 0));
       case 'eventHeavyArmor': return !!(ctx && ctx.card && (ctx.card.heavyArmor || 0) > 0);
       case 'eventOwnerFriendly': return !!(ctx && card && ctx.owner != null && ctx.owner === card.owner);
@@ -2684,7 +2698,7 @@
       this.activateCountermeasures(cur);
       // 222nd GUARD RIFLES：钳形回合结束完全修复自身
       for (const u of this.unitsOf(cur)) {
-        if (u._endOfTurnHealSelf && u.loc !== 'discard') { u.defense = u.totalDefense; this.log(`${u.name} 钳形回合结束完全修复`); }
+        if (u._endOfTurnHealSelf && u.loc !== 'discard') { u.defense = (u.maxDef || u.defense) + (u.buffDefense || 0); this.log(`${u.name} 钳形回合结束完全修复`); }
       }
       // "Destroyed at the end of the second turn on the battlefield."（T-70）
       for (const u of [...this.unitsOf(cur)]) {
@@ -3037,6 +3051,11 @@
         this.ev({ e: 'order', uid: c.uid, name: c.name, owner: side,
                   id: c.id, image: c.def.image, nation: c.nation });
         const ctx = { fromLeftmost, fromRightmost, target: opts.target || null };
+        // ROYAL SUSSEX：你的 PRODUCTIONS 打出时 +N kredits
+        if (c.subtype === 'production' && p._productionBonus) {
+          p.kredits = Math.min(RULES.MAX_SLOTS, p.kredits + p._productionBonus);
+          this.log(`${c.name}（PRODUCTION）+${p._productionBonus} 指挥点`);
+        }
         this.execOrderText(c, ctx);
         this.bumpHandWatches('order', side);
         this.fireTrigger('ownCardPlayed', { owner: side, nation: c.nation }, u => u.owner === side);
@@ -3076,7 +3095,12 @@
         this.log(`${c.name} 部署至支援阵线`);
         if (c.has && c.has('exile')) p._exilePlayedTurn = this.turn;
         // "Gets +1 attack when a unit with higher attack is deployed."（LIGHT DETACHMENT 15）
+        // 标志是被动注册型：部署本卡时文本可能尚未经触发执行，lazy 补设（v50 修复首次部署不生效）
         for (const u of this.unitsOf(side)) {
+          if (!u._buffWhenBigger) {
+            const bw = /gets? \+(\d+) attack when a unit with higher attack is deployed/i.exec(u.text || '');
+            if (bw) u._buffWhenBigger = +bw[1];
+          }
           if (u._buffWhenBigger && u.uid !== c.uid && c.totalAttack > u.totalAttack) {
             u.buffAttack += u._buffWhenBigger;
             this.log(`${u.name} +${u._buffWhenBigger} 攻击（更强单位部署）`);
@@ -3218,6 +3242,9 @@
         this.fireTrigger('selfMoveFront', { uid: c.uid }, u => u.uid === c.uid);
         this.fireTrigger('allyMoveFront', { uid: c.uid, owner: c.owner, type: c.type, nation: c.nation, attack: c.totalAttack, card: c },
           u => u.owner === c.owner && u.uid !== c.uid);
+        // "When an enemy unit moves into the frontline, ..."（PZL P.7 / 35th INF）——移动路径此前漏发
+        this.fireTrigger('enemyMoveFront', { uid: c.uid, owner: c.owner, type: c.type, nation: c.nation, attack: c.totalAttack, card: c },
+          u => u.owner !== c.owner);
       } else {
         // 撤退触发（TYPHOON Mk IB：地面单位撤退时抽牌）
         this.fireTrigger('unitRetreated', { uid: c.uid, owner: c.owner, type: c.type, card: c }, () => true);
@@ -3438,18 +3465,32 @@
       };
       if (ambush || shock) {
         // Ambush: defender strikes first. Shock: attacker strikes first.
+        // 钳形伤害转移（KING'S OWN SCOTTISH）——战斗伤害同样转移（v50）
+        const combatApply = (target, amount) => {
+          if (amount <= 0) return;
+          const pn = target._pincerPartner;
+          if (pn && !target._redirected && pn.loc !== 'discard' && pn.uid !== target.uid) {
+            target._redirected = true;
+            pn.defense -= amount;
+            this.log(`${target.name} 受到的 ${amount} 点战斗伤害转移给钳形伙伴 ${pn.name}`);
+            if (pn.defense <= 0) this.destroyCard(pn, atk, true);
+            target._redirected = false;
+            return;
+          }
+          target.defense -= amount;
+        };
         if (ambush) {
           def._ambushTurn = this.turn;   // 本回合已用掉伏击
           const d1 = dmg(def, atk, defSilenced);
-          if (d1 > 0) atk.defense -= d1;
+          combatApply(atk, d1);
           this.log(`${def.name}（伏击）先手造成 ${d1} 点伤害`);
           if (atk.defense <= 0) { this.destroyCard(atk, def, true); return { ok: true }; }
           const d2 = dmg(atk, def, atkSilenced);
-          if (d2 > 0) def.defense -= d2;
+          combatApply(def, d2);
           if (def.defense <= 0) this.destroyCard(def, atk, true);
         } else {
           const d1 = dmg(atk, def, atkSilenced);
-          if (d1 > 0) def.defense -= d1;
+          combatApply(def, d1);
           this.log(`${atk.name}（冲击）先手造成 ${d1} 点伤害`);
           atk.keywords.delete('shock');   // 冲击用后移除
           if (def.defense <= 0) { this.destroyCard(def, atk, true); this.postAttackHooks(atk, def, true); return { ok: true }; }
@@ -3474,8 +3515,22 @@
       let dToAtk = 0;
       // 反击判定（见 canCounter）：防守方为轰炸机/炮兵不反击；炮兵攻击不吃反击；轰炸机仅对战斗机吃反击
       if (this.canCounter(atk, def)) dToAtk = dmg(def, atk, defSilenced);
-      if (dToDef > 0) def.defense -= dToDef;
-      if (dToAtk > 0) atk.defense -= dToAtk;
+      // 钳形伤害转移（KING'S OWN SCOTTISH）——战斗伤害同样转移（v50）
+      const combatApply2 = (target, amount) => {
+        if (amount <= 0) return;
+        const pn = target._pincerPartner;
+        if (pn && !target._redirected && pn.loc !== 'discard' && pn.uid !== target.uid) {
+          target._redirected = true;
+          pn.defense -= amount;
+          this.log(`${target.name} 受到的 ${amount} 点战斗伤害转移给钳形伙伴 ${pn.name}`);
+          if (pn.defense <= 0) this.destroyCard(pn, atk, true);
+          target._redirected = false;
+          return;
+        }
+        target.defense -= amount;
+      };
+      combatApply2(def, dToDef);
+      combatApply2(atk, dToAtk);
       // "It deals 0-1 additional damage."（KATYUSHA）
       if (atk._extraDmgMax) {
         const extra = Math.floor(this.rng.next() * (atk._extraDmgMax + 1));
@@ -4753,7 +4808,11 @@
             if (!t) return;
             // "Your orders deal +N damage"：指令伤害全局加成
             let dmg = n;
-            if (src && src.type === 'order') dmg += (this.players[me]._orderDmgMod || 0);
+            if (src && src.type === 'order') {
+              dmg += (this.players[me]._orderDmgMod || 0);
+              // ROYAL SUSSEX：仅 BLASTS 子类型
+              if (src.subtype === 'blast') dmg += (this.players[me]._blastDmgBonus || 0);
+            }
             this.damageCard(t, dmg, src);
           };
           const calcN = () => {
@@ -4810,7 +4869,13 @@
           if (t) apply(t, n); else this.log(`（没有合法伤害目标）`);
           break;
         }
-        case 'draw': this.draw(me, op.n); break;
+        case 'draw': {
+          let dn = op.n;
+          // ROYAL SUSSEX：正在结算的 PLANS 指令抽牌 +N
+          if (src && src.type === 'order' && src.subtype === 'plan') dn += (this.players[me]._planDrawBonus || 0);
+          this.draw(me, dn);
+          break;
+        }
         case 'slots': {
           // side:'enemy' —— "Enemy loses a kredit slot"（SHELLING）
           const tgtSide = op.side === 'enemy' ? foe : me;
@@ -4835,6 +4900,24 @@
           const p = this.players[me];
           p._orderDmgMod = (p._orderDmgMod || 0) + op.n;
           this.log(`我方指令伤害 +${op.n}`);
+          break;
+        }
+        case 'blastDmgBonus': {
+          // ROYAL SUSSEX：你的 BLASTS 指令伤害 +N（在 damage op 结算处应用）
+          this.players[me]._blastDmgBonus = (this.players[me]._blastDmgBonus || 0) + op.n;
+          this.log(`我方 BLASTS 指令伤害 +${op.n}`);
+          break;
+        }
+        case 'planDrawBonus': {
+          // ROYAL SUSSEX：你的 PLANS 抽牌 +N（在 draw op 结算处应用）
+          this.players[me]._planDrawBonus = (this.players[me]._planDrawBonus || 0) + op.n;
+          this.log(`我方 PLANS 抽牌 +${op.n}`);
+          break;
+        }
+        case 'productionBonus': {
+          // ROYAL SUSSEX：你的 PRODUCTIONS 打出时 +N kredits（在 playCard order 分支应用）
+          this.players[me]._productionBonus = (this.players[me]._productionBonus || 0) + op.n;
+          this.log(`我方 PRODUCTIONS 打出 +${op.n} 指挥点`);
           break;
         }
         case 'opCostMod': {
@@ -5027,13 +5110,26 @@
         case 'convert': {
           // ① 自身变形：At the end of turn, Convert into X（op.name）
           // ② 目标单位变形：Convert target unit into X（op.to）
+          // ③ 手牌卡变形：Convert a card in hand into X（op.target==='handCard'，KV-85）
           const targetName = op.name || op.to;
+          const tdef0 = this.resolveSpawnDef(targetName, me, ctx)
+            || this.findByName(targetName, me)[0] || this.findByName(targetName)[0];
+          if (!tdef0) { this.log(`（未找到变形目标：${targetName}）`); break; }
+          if (op.target === 'handCard') {
+            const hand = this.players[me].hand;
+            const t = hand[0];
+            if (!t) { this.log('（手牌为空，无法转化）'); break; }
+            const nc = new CardInst(tdef0, me, this);
+            nc.uid = t.uid; nc.loc = 'hand';
+            hand[hand.indexOf(t)] = nc;
+            this.log(`手牌 ${t.name} 变为 ${nc.name}`);
+            break;
+          }
           if (!op.name) {
             const targets = op.target === 'allEnemyUnits' || op.target === 'allUnits'
               ? (op.target === 'allEnemyUnits' ? this.unitsOf(foe) : [...this.unitsOf(0), ...this.unitsOf(1)])
               : [pickUnit(op.target === 'friendlyUnit' ? 'friendlyUnit' : 'enemyUnit')].filter(Boolean);
-            const tdef = this.findByName(targetName, me)[0] || this.findByName(targetName)[0];
-            if (!tdef) { this.log(`（未找到变形目标：${targetName}）`); break; }
+            const tdef = tdef0;
             for (const t of targets) {
               const nc = new CardInst(tdef, t.owner, this);
               nc.uid = t.uid; nc.loc = t.loc; nc.slot = t.slot;
@@ -6096,15 +6192,17 @@
           break;
         }
         case 'heal': {
+          // 满血 = 印刷生命 maxDef + 增益 buffDefense（totalDefense 是"当前+增益"，随伤害变小，不能当满血用 v50 修复）
+          const fullOf = (u) => (u.maxDef || u.defense) + (u.buffDefense || 0);
           if (op.target === 'self') {
-            const miss = src.totalDefense - src.defense;
-            if (miss > 0) { src.defense = src.totalDefense; this.log(`${src.name} 完全修复（+${miss}）`); }
+            const miss = fullOf(src) - src.defense;
+            if (miss > 0) { src.defense = fullOf(src); this.log(`${src.name} 完全修复（+${miss}）`); }
             break;
           }
           let healed = 0;
           for (const u of this.unitsOf(me)) {
-            const missing = u.totalDefense - u.defense;
-            if (missing > 0) { u.defense = u.totalDefense; healed++; }
+            const missing = fullOf(u) - u.defense;
+            if (missing > 0) { u.defense = fullOf(u); healed++; }
           }
           this.log(`完全修复了 ${healed} 个我方单位`);
           break;
@@ -6473,7 +6571,10 @@
           this.players[me]._weatherPlayedTurn = this.turn;
           this.players[me]._weatherKind = op.kind;
           if (op.kind === 'rain' && this.unitsOf(me).some(u => u._repairOnRain)) {
-            for (const u of this.unitsOf(me)) if (u.type === 'infantry' && u.defense < u.totalDefense) u.defense = u.totalDefense;
+            for (const u of this.unitsOf(me)) {
+              const full = (u.maxDef || u.defense) + (u.buffDefense || 0);
+              if (u.type === 'infantry' && u.defense < full) u.defense = full;
+            }
             this.log('降雨：我方步兵全部修复（162nd REGIMENT）');
           }
           this.log(`天气：${names[op.kind] || '变化'}`);
@@ -6583,6 +6684,15 @@
       }
       if (nm === 'japanese ground' || nm === 'a random japanese ground unit' || nm === 'random japanese ground unit') {
         const cands = this.db.cards.filter(c => c.nation === 'Japan' && ['infantry', 'tank', 'artillery'].includes(c.type));
+        return cands.length ? cands[Math.floor(this.rng.next() * cands.length)] : null;
+      }
+      // order 子类型引用："Convert a random card in the enemy hand into PRODUCTION."（JAGDPANZER IV）
+      if (nm === 'production' || nm === 'a production') {
+        const cands = this.db.cards.filter(c => c.type === 'order' && c.subtype === 'production');
+        return cands.length ? cands[Math.floor(this.rng.next() * cands.length)] : null;
+      }
+      if (nm === 'blast' || nm === 'a blast') {
+        const cands = this.db.cards.filter(c => c.type === 'order' && c.subtype === 'blast');
         return cands.length ? cands[Math.floor(this.rng.next() * cands.length)] : null;
       }
       if (nm === 'japanese unit' || nm === 'random japanese unit') {

@@ -90,11 +90,13 @@ function check(name, ok, extra) { results.push({ name, ok: !!ok, extra: extra ||
   g.fireTrigger('enemyMoveFront', { uid: 0, owner: 1, type: 'infantry', nation: 'german' }, () => true);
   check('PZL P.7 敌方进前线则撤退', p.loc === 'board', `loc=${p.loc}`);
 }
-// 7. FIAT C.R.32：总部回血→修复全体友军
+// 7. FIAT C.R.32：总部回血→修复全体友军（真实受伤后断言恢复到 maxDef+buff）
 {
-  const g = mk(); const f = onBoard(g, 'card_unit_fiat_cr_32'); f.defense = 2;
+  const g = mk(); const f = onBoard(g, 'card_unit_fiat_cr_32');
+  f.defense = f.maxDef - 2;   // 真实受伤（maxDef 为印刷生命；totalDefense 随 defense 变小，不能当满血）
   g.fireTrigger('ownHqHealed', { side: 0, amount: 1 }, () => true);
-  check('FIAT 总部回血则修复友军', f.defense === f.totalDefense, `def=${f.defense}/${f.totalDefense}`);
+  const full = f.maxDef + (f.buffDefense || 0);
+  check('FIAT 总部回血则修复友军', f.defense === full, `def=${f.defense}/${full}`);
 }
 // 8. 37mm M1 AA GUN：攻击后重置防守方攻击
 {
@@ -140,13 +142,15 @@ function check(name, ok, extra) { results.push({ name, ok: !!ok, extra: extra ||
   g.execCardText(u, 'pincer', { partner });
   check('TUPOLEV 钳形敌方攻击+2税', u._enemyTax === 2, `_enemyTax=${u._enemyTax}`);
 }
-// 14. 222nd GUARD RIFLES：钳形回合末自愈
+// 14. 222nd GUARD RIFLES：钳形回合末自愈（真实受伤后断言恢复到 maxDef+buff）
 {
-  const g = mk(); const u = onBoard(g, 'card_unit_222th_guard_rifles'); u.defense = 1;
+  const g = mk(); const u = onBoard(g, 'card_unit_222th_guard_rifles');
+  u.defense = u.maxDef - 2;
   const partner = put(g, FILL[0].id);
   g.execCardText(u, 'pincer', { partner });
   g.endTurn();
-  check('222nd 钳形回合末自愈', u.defense === u.totalDefense, `def=${u.defense}/${u.totalDefense}`);
+  const full = u.maxDef + (u.buffDefense || 0);
+  check('222nd 钳形回合末自愈', u.defense === full, `def=${u.defense}/${full}`);
 }
 // 15. 18e RÉGIMENT：仅部署一张则回合末行动费0
 {
@@ -281,6 +285,59 @@ function check(name, ok, extra) { results.push({ name, ok: !!ok, extra: extra ||
   g.destroyCard(u, null, false);
   const jp = g.unitsOf(0).find(x => x.nation === 'Japan' && ['infantry', 'tank', 'artillery'].includes(x.type));
   check('KOKURAS 敌方回合亡计加日军地面单位', !!jp, jp ? jp.id : g.unitsOf(0).map(x => x.id).join(','));
+}
+
+// 32. ROYAL SUSSEX：BLASTS 指令伤害 +1（A/B 对比，同 seed 确定性）
+{
+  const BLAST = 'card_event_carpet_bombing';   // Deal 3 damage to all enemy units.
+  const run = (withSussex) => {
+    const g = mk();
+    const foe = new E.CardInst(FILL[2], 1, g); foe.loc = 'board'; foe.defense = 10; g.players[1].board.push(foe);
+    if (withSussex) { const s = onBoard(g, 'card_unit_royal_sussex_regiment'); g.execCardText(s, 'static', {}); }
+    const b = new E.CardInst(byId(BLAST), 0, g); b.loc = 'hand'; g.players[0].hand.push(b);
+    g.playCard(0, g.players[0].hand.indexOf(b), {});
+    return 10 - foe.defense;
+  };
+  const base = run(false), buff = run(true);
+  check('ROYAL SUSSEX BLASTS +1 伤害', buff === base + 1, `base=${base} buff=${buff}`);
+}
+// 33. ROYAL SUSSEX：PLANS 抽牌 +1
+{
+  const PLAN = 'card_event_convoy_175';        // Draw 2 cards.
+  const run = (withSussex) => {
+    const g = mk();
+    if (withSussex) { const s = onBoard(g, 'card_unit_royal_sussex_regiment'); g.execCardText(s, 'static', {}); }
+    const h0 = g.players[0].hand.length;
+    const b = new E.CardInst(byId(PLAN), 0, g); b.loc = 'hand'; g.players[0].hand.push(b);
+    g.playCard(0, g.players[0].hand.indexOf(b), {});
+    return g.players[0].hand.length - h0;
+  };
+  const base = run(false), buff = run(true);
+  check('ROYAL SUSSEX PLANS 抽牌 +1', buff === base + 1, `base=${base} buff=${buff}`);
+}
+// 34. ROYAL SUSSEX：PRODUCTIONS 打出 +1 指挥点
+{
+  const PROD = 'card_event_production';  // cost 0, "Gain 1 additional kredit this turn."
+  const run = (withSussex) => {
+    const g = mk();
+    if (withSussex) { const s = onBoard(g, 'card_unit_royal_sussex_regiment'); g.execCardText(s, 'static', {}); }
+    const k0 = g.players[0].kredits = 10;   // 避免返费被 MAX_SLOTS(24) 封顶干扰断言
+    const b = new E.CardInst(byId(PROD), 0, g); b.loc = 'hand'; g.players[0].hand.push(b);
+    g.playCard(0, g.players[0].hand.indexOf(b), {});
+    return g.players[0].kredits - k0;
+  };
+  const base = run(false), buff = run(true);
+  check('ROYAL SUSSEX PRODUCTIONS +1 指挥点', buff === base + 1, `base=${base} buff=${buff}`);
+}
+// 35. JAGDPANZER IV：击杀→敌方随机手牌转为 PRODUCTION 指令
+{
+  const g = mk(); const j = front(g, 'card_unit_jagdpanzer_iv'); j.buffAttack = 12;
+  const enemy = new E.CardInst(FILL[2], 1, g); enemy.loc = 'front'; enemy.defense = 1; g.frontline.push(enemy);
+  g.players[1].hand.length = 0;
+  const plain = new E.CardInst(FILL[0], 1, g); plain.loc = 'hand'; g.players[1].hand.push(plain);
+  g.attack(0, j.uid, enemy.uid);
+  const converted = g.players[1].hand.some(c => c.type === 'order' && c.subtype === 'production');
+  check('JAGDPANZER IV 敌方手牌转 PRODUCTION', converted, g.players[1].hand.map(c => c.name).join(','));
 }
 
 const pass = results.filter(r => r.ok).length;
